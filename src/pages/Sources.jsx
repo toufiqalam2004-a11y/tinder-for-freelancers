@@ -25,7 +25,7 @@ import Card from '../components/Card';
 import AddSourceModal from '../components/AddSourceModal';
 import UpgradeModal from '../components/UpgradeModal';
 import { useSources } from '../contexts/SourcesContext';
-import { isDemoMode, setDemoMode } from '../data/storage';
+import { isDemoMode, setDemoMode } from '../data/storage.js';
 import { subscriptionService } from '../services/subscriptionService';
 
 const Sources = () => {

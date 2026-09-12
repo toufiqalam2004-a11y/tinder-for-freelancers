@@ -3,7 +3,7 @@
  * Multi-entity fast search engine across Jobs, Companies, Clients, Sources, and Applications.
  */
 
-import { getJobs, getApplications, getSources, getLeads } from '../data/storage';
+import { getJobs, getApplications, getSources, getLeads } from '../data/storage.js';
 
 class SearchService {
   search(query = '') {

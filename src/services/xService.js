@@ -1,4 +1,4 @@
-import { isDemoMode } from '../data/storage';
+import { isDemoMode } from '../data/storage.js';
 
 /**
  * X (Twitter) Integration Service

@@ -43,9 +43,9 @@ import {
   logUserEvent,
   getUserEvents,
   addNotification,
-} from '../data/storage';
+} from '../data/storage.js';
 import { DEMO_SAMPLE_POSTS, processPostToJob } from '../services/jobClassifier';
-import { createPost, createSavedSearch, createNotification } from '../data/models';
+import { createPost, createSavedSearch, createNotification } from '../data/models.js';
 import {
   REMOTE_OPTIONS,
   MATCH_THRESHOLDS,

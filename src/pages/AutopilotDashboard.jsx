@@ -27,8 +27,8 @@ import {
   getAutopilotStats,
   getDailyOutreachCount,
   saveLeads,
-} from '../data/storage';
-import { createLead, createAgentActivity, createOutreachMessage, createLeadResearch } from '../data/models';
+} from '../data/storage.js';
+import { createLead, createAgentActivity, createOutreachMessage, createLeadResearch } from '../data/models.js';
 import { autopilotEngine } from '../services/autopilotEngine';
 import { aiProvider } from '../services/aiProvider';
 import toast from 'react-hot-toast';

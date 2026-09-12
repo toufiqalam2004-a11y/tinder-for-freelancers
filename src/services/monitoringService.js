@@ -13,8 +13,8 @@ import {
   getJobs,
   addJob,
   getUser,
-} from '../data/storage';
-import { createPost } from '../data/models';
+} from '../data/storage.js';
+import { createPost } from '../data/models.js';
 
 /**
  * Modular Monitoring & Fetching Service (V2)

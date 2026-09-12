@@ -8,7 +8,7 @@ import {
   markNotificationAsRead,
   markAllNotificationsRead,
   clearNotifications,
-} from '../data/storage';
+} from '../data/storage.js';
 import toast from 'react-hot-toast';
 
 export default function NotificationsModal({ isOpen, onClose, onRefresh }) {

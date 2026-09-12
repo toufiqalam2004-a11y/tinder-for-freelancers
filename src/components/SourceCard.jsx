@@ -17,7 +17,7 @@ import Card from './Card';
 import StatusBadge from './StatusBadge';
 import Button from './Button';
 import { monitoringService } from '../services/monitoringService';
-import { isDemoMode } from '../data/storage';
+import { isDemoMode } from '../data/storage.js';
 
 export default function SourceCard({
   source,

@@ -31,7 +31,7 @@ import {
   getAutopilotSettings,
   saveAutopilotSettings,
   resetAutopilotSetup,
-} from '../data/storage';
+} from '../data/storage.js';
 import Modal from '../components/Modal';
 import { APP_CONFIG } from '../utils/constants';
 import toast from 'react-hot-toast';

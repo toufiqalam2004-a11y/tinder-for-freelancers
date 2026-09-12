@@ -7,8 +7,8 @@ import Card from '../components/Card';
 import Input from '../components/Input';
 import Button from '../components/Button';
 import { useProfile } from '../contexts/ProfileContext';
-import { createJob } from '../data/models';
-import { addJob } from '../data/storage';
+import { createJob } from '../data/models.js';
+import { addJob } from '../data/storage.js';
 import { calculateProfileMatch, extractJobAttributes } from '../services/jobClassifier';
 import { isValidUrl } from '../utils/validators';
 

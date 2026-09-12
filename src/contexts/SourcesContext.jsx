@@ -5,8 +5,8 @@ import {
   removeSource as persistRemove,
   updateSource as persistUpdate,
   toggleSourceEnabled as persistToggle,
-} from '../data/storage';
-import { createJobSource } from '../data/models';
+} from '../data/storage.js';
+import { createJobSource } from '../data/models.js';
 import { monitoringService } from '../services/monitoringService';
 
 const SourcesContext = createContext(null);

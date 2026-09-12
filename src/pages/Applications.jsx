@@ -36,7 +36,7 @@ import {
   setAutoDeletePreference,
   cleanupOldApplications,
   isDemoMode,
-} from '../data/storage';
+} from '../data/storage.js';
 import { APPLICATION_STATUS_CONFIG } from '../utils/constants';
 import toast from 'react-hot-toast';
 

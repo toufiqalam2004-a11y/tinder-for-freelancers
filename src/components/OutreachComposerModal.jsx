@@ -7,8 +7,8 @@ import {
 import Button from './Button';
 import { aiProvider } from '../services/aiProvider';
 import { useProfile } from '../contexts/ProfileContext';
-import { updateLead, addOutreachMessage } from '../data/storage';
-import { createOutreachMessage } from '../data/models';
+import { updateLead, addOutreachMessage } from '../data/storage.js';
+import { createOutreachMessage } from '../data/models.js';
 import toast from 'react-hot-toast';
 
 const TONES = [

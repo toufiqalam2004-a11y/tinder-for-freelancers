@@ -24,8 +24,8 @@ import {
   incrementDailyOutreachCount,
   getJobs,
   addNotification,
-} from '../data/storage';
-import { createLead, createAgentTask, createAgentActivity, createNotification } from '../data/models';
+} from '../data/storage.js';
+import { createLead, createAgentTask, createAgentActivity, createNotification } from '../data/models.js';
 import { aiProvider } from './aiProvider';
 import { calculateProMatch } from './proMatchEngine';
 

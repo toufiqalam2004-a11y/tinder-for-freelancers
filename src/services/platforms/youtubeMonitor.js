@@ -1,5 +1,5 @@
 import { BasePlatformMonitor } from './baseMonitor';
-import { isDemoMode } from '../../data/storage';
+import { isDemoMode } from '../../data/storage.js';
 
 export class YouTubeMonitor extends BasePlatformMonitor {
   constructor() {

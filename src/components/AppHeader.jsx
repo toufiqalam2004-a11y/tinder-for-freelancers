@@ -4,7 +4,7 @@ import { ArrowLeft, Bell, Search, Settings, Crown } from 'lucide-react';
 import ThemeSelector from './ThemeSelector';
 import NotificationsModal from './NotificationsModal';
 import GlobalSearchModal from './GlobalSearchModal';
-import { getNotifications } from '../data/storage';
+import { getNotifications } from '../data/storage.js';
 import { subscriptionService } from '../services/subscriptionService';
 import { APP_CONFIG } from '../utils/constants';
 

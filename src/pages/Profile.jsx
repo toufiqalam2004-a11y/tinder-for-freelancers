@@ -15,7 +15,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import ColorThemeCustomizer from '../components/ColorThemeCustomizer';
 import { calculateProfileStrength } from '../services/proMatchEngine';
-import { getFunnelAnalytics, getAutopilotStats, getWorkspaces } from '../data/storage';
+import { getFunnelAnalytics, getAutopilotStats, getWorkspaces } from '../data/storage.js';
 import { subscriptionService } from '../services/subscriptionService';
 import { usageService } from '../services/usageService';
 

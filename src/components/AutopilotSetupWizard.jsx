@@ -5,8 +5,8 @@ import {
   Target, Shield, Mail, MessageCircle, Sliders, Zap, CheckCircle2, Lock 
 } from 'lucide-react';
 import Button from './Button';
-import { getAutopilotSettings, saveAutopilotSettings, logAgentActivity } from '../data/storage';
-import { createAgentActivity } from '../data/models';
+import { getAutopilotSettings, saveAutopilotSettings, logAgentActivity } from '../data/storage.js';
+import { createAgentActivity } from '../data/models.js';
 import { subscriptionService } from '../services/subscriptionService';
 import toast from 'react-hot-toast';
 

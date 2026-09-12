@@ -29,7 +29,7 @@ import {
   updateJobStatus,
   addApplication,
   getPosts,
-} from '../data/storage';
+} from '../data/storage.js';
 
 const SourceDetails = () => {
   const { id } = useParams();

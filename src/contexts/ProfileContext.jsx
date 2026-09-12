@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useMemo } from 'react';
-import { getUser, saveUser as persistUser } from '../data/storage';
-import { createUser } from '../data/models';
+import { getUser, saveUser as persistUser } from '../data/storage.js';
+import { createUser } from '../data/models.js';
 
 const ProfileContext = createContext(null);
 

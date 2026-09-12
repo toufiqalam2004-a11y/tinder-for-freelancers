@@ -20,8 +20,8 @@ import { redditService } from '../services/redditService';
 import { youtubeService } from '../services/youtubeService';
 import { xService } from '../services/xService';
 import { isValidFacebookGroupUrl } from '../utils/validators';
-import { createJob } from '../data/models';
-import { addJob } from '../data/storage';
+import { createJob } from '../data/models.js';
+import { addJob } from '../data/storage.js';
 import { extractJobAttributes, calculateProfileMatch } from '../services/jobClassifier';
 
 const PLATFORMS_CONFIG = [

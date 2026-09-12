@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback } from 'react';
-import { getAuth, setAuth as persistAuth } from '../data/storage';
+import { getAuth, setAuth as persistAuth } from '../data/storage.js';
 
 const AuthContext = createContext(null);
 

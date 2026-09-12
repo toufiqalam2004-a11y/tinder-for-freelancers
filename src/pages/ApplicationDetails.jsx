@@ -21,7 +21,7 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 import StatusBadge from '../components/StatusBadge';
 import StatusUpdateModal from '../components/StatusUpdateModal';
-import { getApplicationById, updateApplication, getJobById } from '../data/storage';
+import { getApplicationById, updateApplication, getJobById } from '../data/storage.js';
 import { APPLICATION_STATUS_CONFIG } from '../utils/constants';
 
 const ApplicationDetails = () => {
