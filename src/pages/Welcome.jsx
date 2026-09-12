@@ -76,23 +76,15 @@ const Welcome = () => {
   const handleContinue = async (e) => {
     e.preventDefault();
 
-    const cleanNumber = phoneNumber.replace(/\s+/g, '');
-    if (!/^[0-9]{10}$/.test(cleanNumber)) {
-      if (cleanNumber.length < 10) {
-        setError(`Phone number has only ${cleanNumber.length} digits. Exactly 10 digits required.`);
-      } else if (cleanNumber.length > 10) {
-        setError(`Phone number has ${cleanNumber.length} digits. Exactly 10 digits required.`);
-      } else {
-        setError('Phone number must be exactly 10 digits (0-9).');
-      }
-      return; // Absolute block: do NOT call the OTP API
+    if (phoneNumber.length !== 10 || !/^[0-9]{10}$/.test(phoneNumber)) {
+      return;
     }
 
     // Strict 10-digit validation guard
-    const validation = validatePhoneNumber(countryCode, cleanNumber);
+    const validation = validatePhoneNumber(countryCode, phoneNumber);
     if (!validation.isValid) {
       setError(validation.error);
-      return; // Do NOT call the OTP API
+      return;
     }
 
     setError('');
@@ -323,31 +315,20 @@ const Welcome = () => {
                   )}
                 </div>
 
-                {/* Phone number input - Exact 10 digits without silent truncation */}
+                {/* Phone number input - Only numeric digits, max 10 */}
                 <input
                   type="tel"
                   inputMode="numeric"
-                  placeholder="10-digit mobile number"
+                  pattern="[0-9]*"
+                  maxLength={10}
+                  placeholder="Enter 10-digit number"
                   value={phoneNumber}
                   onChange={(e) => {
-                    const val = e.target.value;
+                    const val = e.target.value.replace(/\D/g, '').slice(0, 10);
                     setPhoneNumber(val);
-                    const cleaned = val.replace(/\s+/g, '');
-                    if (cleaned.length > 0) {
-                      if (/[^\d]/.test(cleaned)) {
-                        setError('Phone number must contain digits only.');
-                      } else if (cleaned.length < 10) {
-                        setError(`Phone number has only ${cleaned.length} digits. Exactly 10 digits required.`);
-                      } else if (cleaned.length > 10) {
-                        setError(`Phone number has ${cleaned.length} digits. Exactly 10 digits required.`);
-                      } else {
-                        setError('');
-                      }
-                    } else {
-                      setError('');
-                    }
+                    setError('');
                   }}
-                  className="flex-1 bg-surface-hover border border-border rounded-xl px-4 py-3 text-text-primary placeholder:text-text-muted outline-none transition-all focus:border-primary focus:ring-1 focus:ring-primary/30 text-sm"
+                  className="flex-1 bg-surface-hover border border-border rounded-xl px-4 py-3 text-text-primary placeholder:text-text-muted outline-none transition-all focus:border-primary focus:ring-1 focus:ring-primary/30 text-sm font-mono tracking-wide"
                   autoComplete="tel"
                   autoFocus
                 />
@@ -360,15 +341,12 @@ const Welcome = () => {
                 </span>
                 <span
                   className={
-                    phoneNumber.replace(/\s+/g, '').length === 10 &&
-                    /^[0-9]{10}$/.test(phoneNumber.replace(/\s+/g, ''))
+                    phoneNumber.length === 10
                       ? 'text-emerald-500 font-bold'
-                      : phoneNumber.length > 0
-                      ? 'text-rose-500 font-medium'
-                      : ''
+                      : 'text-text-muted font-medium'
                   }
                 >
-                  {phoneNumber.replace(/\s+/g, '').length}/10 digits
+                  {phoneNumber.length}/10 digits
                 </span>
               </div>
 
@@ -382,12 +360,12 @@ const Welcome = () => {
                 type="submit"
                 variant="primary"
                 fullWidth
-                disabled={!/^[0-9]{10}$/.test(phoneNumber.replace(/\s+/g, '')) || authLoading}
+                disabled={phoneNumber.length !== 10 || authLoading}
                 loading={authLoading}
                 className="mt-2"
                 icon={<Phone size={16} />}
               >
-                Send OTP Verification
+                Continue / Get OTP
               </Button>
             </motion.form>
           )}
