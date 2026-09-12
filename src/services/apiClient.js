@@ -53,6 +53,7 @@ export const apiClient = {
         return {
           success: false,
           error: data.error || `HTTP ${res.status}: Failed to send OTP`,
+          remainingSeconds: data.remainingSeconds,
           status: res.status,
         };
       }
@@ -82,6 +83,7 @@ export const apiClient = {
         return {
           success: false,
           error: data.error || `HTTP ${res.status}: Failed to verify OTP`,
+          remainingAttempts: data.remainingAttempts,
           status: res.status,
         };
       }

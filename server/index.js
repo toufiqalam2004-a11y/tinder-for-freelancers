@@ -102,7 +102,7 @@ function createRateLimiter(maxRequests = 100, windowMs = 60 * 1000) {
 }
 
 const globalLimiter = createRateLimiter(120, 60 * 1000);
-const authLimiter = createRateLimiter(IS_PROD ? 15 : 60, 60 * 1000); // Max 15/min prod, 60/min dev
+const authLimiter = createRateLimiter(IS_PROD ? 30 : 200, 60 * 1000); // Max 30/min prod, 200/min dev
 const aiLimiter = createRateLimiter(15, 60 * 1000);   // Max 15 AI gens/min
 
 app.use(globalLimiter);
@@ -237,6 +237,10 @@ function parseAndValidatePhoneRequest(body = {}) {
   };
 }
 
+// Rate limit store for OTP requests per phone number
+// phone -> { history: [timestamps], cooldownUntil: timestamp }
+const otpRequestRateLimits = new Map();
+
 app.post('/api/auth/send-otp', authLimiter, (req, res) => {
   const validation = parseAndValidatePhoneRequest(req.body);
   if (!validation.isValid) {
@@ -244,24 +248,55 @@ app.post('/api/auth/send-otp', authLimiter, (req, res) => {
   }
 
   const sanitizedPhone = validation.normalizedNumber;
-  const now = Date.now();
-  const existing = otpStore.get(sanitizedPhone);
-  if (existing && now < existing.resendAvailableAt) {
-    const waitSec = Math.ceil((existing.resendAvailableAt - now) / 1000);
-    return res.status(429).json({ success: false, error: `Please wait ${waitSec}s before requesting a new OTP.` });
+  const now = Date.now() + (IS_PROD ? 0 : Number(req.headers['x-test-clock-skew'] || 0));
+
+  // Phone-level Rate Limiting
+  let rateLimit = otpRequestRateLimits.get(sanitizedPhone);
+  if (!rateLimit) {
+    rateLimit = { history: [], cooldownUntil: 0 };
+    otpRequestRateLimits.set(sanitizedPhone, rateLimit);
   }
+
+  // 1. Clean history older than rolling 1-hour window (60 * 60 * 1000 ms)
+  rateLimit.history = rateLimit.history.filter((ts) => now - ts < 60 * 60 * 1000);
+
+  // 2. Check 60-second cooldown between requests for the same phone number
+  if (now < rateLimit.cooldownUntil) {
+    const waitSec = Math.ceil((rateLimit.cooldownUntil - now) / 1000);
+    return res.status(429).json({
+      success: false,
+      error: `Please wait ${waitSec} seconds before requesting another OTP.`,
+      remainingSeconds: waitSec,
+      cooldownActive: true,
+    });
+  }
+
+  // 3. Check Maximum 5 OTP requests per phone number per rolling 1-hour window
+  if (rateLimit.history.length >= 5) {
+    return res.status(429).json({
+      success: false,
+      error: 'Too many OTP requests. Please try again later.',
+      hourlyLimitReached: true,
+    });
+  }
+
+  // Rate limit checks passed: Record this request
+  rateLimit.history.push(now);
+  rateLimit.cooldownUntil = now + 60 * 1000; // 60-second cooldown
 
   // Environment-controlled demo switch: disabled in production unless ENABLE_DEMO_OTP === 'true'
   const allowDemoOtp = process.env.ENABLE_DEMO_OTP === 'true' || (!IS_PROD && process.env.ENABLE_DEMO_OTP !== 'false');
   const code = allowDemoOtp ? '123456' : Math.floor(100000 + Math.random() * 900000).toString();
 
+  // If a new OTP is requested, invalidate any previous OTP and overwrite with fresh parameters
   otpStore.set(sanitizedPhone, {
     code,
     countryCode: validation.countryCode,
     localNumber: validation.localNumber,
-    expiresAt: now + 5 * 60 * 1000,       // 5 minute expiration
-    attempts: 0,                           // max 3 failed attempts
-    resendAvailableAt: now + 30 * 1000,    // 30s resend cooldown
+    createdAt: now,
+    expiresAt: now + 10 * 60 * 1000,      // 10-minute expiration
+    attempts: 0,                          // max 5 failed attempts
+    isDemo: allowDemoOtp,
   });
 
   res.json({
@@ -271,6 +306,7 @@ app.post('/api/auth/send-otp', authLimiter, (req, res) => {
     countryCode: validation.countryCode,
     localNumber: validation.localNumber,
     isDemo: allowDemoOtp,
+    cooldownSeconds: 60,
   });
 });
 
@@ -288,24 +324,54 @@ app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
   const sanitizedPhone = validation.normalizedNumber;
   const cleanCode = code.trim();
   const record = otpStore.get(sanitizedPhone);
+  const now = Date.now() + (IS_PROD ? 0 : Number(req.headers['x-test-clock-skew'] || 0));
 
-  if (!record || Date.now() > record.expiresAt) {
-    if (record) otpStore.delete(sanitizedPhone);
-    return res.status(400).json({ success: false, error: 'OTP code has expired or was not requested. Please request a new code.' });
+  // Case 1: No OTP request was made for this phone
+  if (!record) {
+    return res.status(400).json({
+      success: false,
+      error: 'No active OTP request found for this phone number. Please request an OTP first.',
+    });
   }
 
-  if (record.attempts >= 3) {
+  // Case 2: OTP has expired (> 10 minutes)
+  if (now > record.expiresAt) {
     otpStore.delete(sanitizedPhone);
-    return res.status(429).json({ success: false, error: 'Too many failed attempts. This OTP has been invalidated.' });
+    return res.status(400).json({
+      success: false,
+      error: 'OTP code has expired. Please request a new code.',
+    });
   }
 
+  // Case 3: Failed attempt limit reached (max 5)
+  if (record.attempts >= 5) {
+    otpStore.delete(sanitizedPhone);
+    return res.status(429).json({
+      success: false,
+      error: 'Too many failed attempts. This OTP has been invalidated. Please request a new code.',
+    });
+  }
+
+  // Verification
   const isValid = cleanCode === record.code;
   if (!isValid) {
     record.attempts++;
-    return res.status(400).json({ success: false, error: `Invalid verification code. ${3 - record.attempts} attempts remaining.` });
+    if (record.attempts >= 5) {
+      otpStore.delete(sanitizedPhone);
+      return res.status(429).json({
+        success: false,
+        error: 'Too many failed attempts. This OTP has been invalidated. Please request a new code.',
+      });
+    }
+    const remaining = 5 - record.attempts;
+    return res.status(400).json({
+      success: false,
+      error: `Invalid verification code. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`,
+      remainingAttempts: remaining,
+    });
   }
 
-  // Successful verification -> cleanup OTP
+  // Case 4: Successful verification -> immediately invalidate/delete OTP record so it cannot be reused
   otpStore.delete(sanitizedPhone);
 
   let user = db.users.findOne((u) => u.phone === sanitizedPhone);
@@ -356,6 +422,22 @@ app.post('/api/auth/logout', (req, res) => {
   }
   res.json({ success: true, message: 'Logged out successfully.' });
 });
+
+if (!IS_PROD) {
+  app.post('/api/test/reset-otp', (req, res) => {
+    const { phone } = req.body || {};
+    if (phone) {
+      const validation = parseAndValidatePhoneRequest({ phone });
+      const target = validation.isValid ? validation.normalizedNumber : phone;
+      otpStore.delete(target);
+      otpRequestRateLimits.delete(target);
+    } else {
+      otpStore.clear();
+      otpRequestRateLimits.clear();
+    }
+    res.json({ success: true, message: 'Test OTP state reset successfully.' });
+  });
+}
 
 // 7. Mount API router
 app.use('/api', apiRouter);

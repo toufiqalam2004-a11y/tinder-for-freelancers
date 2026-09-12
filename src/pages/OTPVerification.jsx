@@ -12,9 +12,16 @@ const OTPVerification = () => {
   const { phone, countryCode, localNumber, verifyOtp, sendOtp, authLoading, authError, DEMO_OTP } = useAuth();
 
   const [otp, setOtp] = useState(Array(OTP_LENGTH).fill(''));
-  const [resendTimer, setResendTimer] = useState(30);
+  const [resendTimer, setResendTimer] = useState(60);
   const [canResend, setCanResend] = useState(false);
   const inputRefs = useRef([]);
+
+  // Redirect to Welcome if no phone is set
+  useEffect(() => {
+    if (!phone && !localNumber) {
+      navigate('/', { replace: true });
+    }
+  }, [phone, localNumber, navigate]);
 
   // Countdown timer for resend
   useEffect(() => {
@@ -22,8 +29,9 @@ const OTPVerification = () => {
       setCanResend(true);
       return;
     }
+    setCanResend(false);
     const interval = setInterval(() => {
-      setResendTimer((t) => t - 1);
+      setResendTimer((t) => (t > 0 ? t - 1 : 0));
     }, 1000);
     return () => clearInterval(interval);
   }, [resendTimer]);
@@ -98,9 +106,12 @@ const OTPVerification = () => {
   const handleResend = async () => {
     if (!canResend) return;
     setCanResend(false);
-    setResendTimer(30);
+    setResendTimer(60);
     setOtp(Array(OTP_LENGTH).fill(''));
-    await sendOtp(phone, { countryCode, localNumber });
+    const result = await sendOtp(phone, { countryCode, localNumber });
+    if (result && !result.success && result.remainingSeconds) {
+      setResendTimer(result.remainingSeconds);
+    }
     inputRefs.current[0]?.focus();
   };
 
