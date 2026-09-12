@@ -16,9 +16,9 @@ dist-ssr
 !.env.example
 *.env
 
-# Server data, local databases & backups
-data/
-server/data/
+# Server runtime data, local databases & backups (NEVER COMMIT)
+/data/
+/server/data/
 *.db
 *.sqlite
 *.backup
