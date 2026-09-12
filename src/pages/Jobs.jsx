@@ -21,7 +21,7 @@ import {
   RefreshCw,
   Zap,
 } from 'lucide-react';
-import { AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import PageTransition from '../components/PageTransition';
 import Card from '../components/Card';
@@ -649,154 +649,156 @@ const Jobs = () => {
         </div>
 
         {/* Filter Drawer / Expanded Controls */}
-        {showFilterDrawer && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="mt-3 bg-surface border border-border rounded-2xl p-4 shadow-card text-xs space-y-3"
-          >
-            <div className="flex items-center justify-between pb-2 border-b border-border">
-              <span className="font-bold text-text-primary flex items-center gap-1.5">
-                <SlidersHorizontal size={14} className="text-primary" />
-                Refine Feed
-              </span>
-              {(activeFiltersCount > 0 || sortBy !== 'best_match') && (
-                <button
-                  onClick={() => {
-                    setRemoteFilter('all');
-                    setJobTypeFilter('all');
-                    setMatchScoreFilter('all');
-                    setCategoryFilter('all');
-                    setSortBy('best_match');
-                  }}
-                  className="text-primary font-medium hover:underline text-[11px]"
-                >
-                  Reset all
-                </button>
-              )}
-            </div>
-
-            {/* Sort Dropdown */}
-            <div className="flex items-center justify-between">
-              <span className="text-text-muted font-medium">Sort by:</span>
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value)}
-                className="bg-surface-hover border border-border rounded-lg px-2.5 py-1 text-text-primary focus:outline-none focus:border-primary"
-              >
-                {SORT_OPTIONS.map((opt) => (
-                  <option key={opt.id} value={opt.id}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Remote Filter Chips */}
-            <div>
-              <span className="text-text-muted font-medium block mb-1.5">Location:</span>
-              <div className="flex flex-wrap gap-1.5">
-                {REMOTE_OPTIONS.map((r) => (
-                  <button
-                    key={r.id}
-                    onClick={() => setRemoteFilter(r.id)}
-                    className={`px-2.5 py-1 rounded-lg border transition-all ${
-                      remoteFilter === r.id
-                        ? 'bg-primary text-white border-primary'
-                        : 'bg-surface-hover border-border text-text-secondary hover:text-text-primary'
-                    }`}
-                  >
-                    {r.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Match Score Threshold Chips */}
-            <div>
-              <span className="text-text-muted font-medium block mb-1.5">Match Quality:</span>
-              <div className="flex flex-wrap gap-1.5">
-                {MATCH_THRESHOLDS.map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => setMatchScoreFilter(m.id)}
-                    className={`px-2.5 py-1 rounded-lg border transition-all ${
-                      matchScoreFilter === m.id
-                        ? 'bg-primary text-white border-primary'
-                        : 'bg-surface-hover border-border text-text-secondary hover:text-text-primary'
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Saved Searches Management */}
-            <div className="pt-2 border-t border-border">
-
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-text-muted font-medium flex items-center gap-1">
-                  <Bookmark size={12} className="text-primary" /> Saved Search Alerts
+        <AnimatePresence>
+          {showFilterDrawer && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mt-3 bg-surface border border-border rounded-2xl p-4 shadow-card text-xs space-y-3 overflow-hidden"
+            >
+              <div className="flex items-center justify-between pb-2 border-b border-border">
+                <span className="font-bold text-text-primary flex items-center gap-1.5">
+                  <SlidersHorizontal size={14} className="text-primary" />
+                  Refine Feed
                 </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const check = subscriptionService.canSaveSearch(savedSearches.length);
-                    if (!check.allowed) {
-                      setUpgradeReason(check.reason);
-                      setShowUpgradeModal(true);
-                      return;
-                    }
-                    setShowSavedSearchModal(true);
-                  }}
-                  className="text-primary font-bold hover:underline text-[11px]"
-                >
-                  + Save Current Filter
-                </button>
+                {(activeFiltersCount > 0 || sortBy !== 'best_match') && (
+                  <button
+                    onClick={() => {
+                      setRemoteFilter('all');
+                      setJobTypeFilter('all');
+                      setMatchScoreFilter('all');
+                      setCategoryFilter('all');
+                      setSortBy('best_match');
+                    }}
+                    className="text-primary font-medium hover:underline text-[11px]"
+                  >
+                    Reset all
+                  </button>
+                )}
               </div>
 
-              {savedSearches.length > 0 ? (
-                <div className="space-y-1">
-                  {savedSearches.map((s) => (
-                    <div
-                      key={s.id}
-                      className="flex items-center justify-between p-1.5 rounded-lg bg-surface-hover border border-border"
+              {/* Sort Dropdown */}
+              <div className="flex items-center justify-between">
+                <span className="text-text-muted font-medium">Sort by:</span>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                  className="bg-surface-hover border border-border rounded-lg px-2.5 py-1 text-text-primary focus:outline-none focus:border-primary"
+                >
+                  {SORT_OPTIONS.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Remote Filter Chips */}
+              <div>
+                <span className="text-text-muted font-medium block mb-1.5">Location:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {REMOTE_OPTIONS.map((r) => (
+                    <button
+                      key={r.id}
+                      onClick={() => setRemoteFilter(r.id)}
+                      className={`px-2.5 py-1 rounded-lg border transition-all ${
+                        remoteFilter === r.id
+                          ? 'bg-primary text-white border-primary'
+                          : 'bg-surface-hover border-border text-text-secondary hover:text-text-primary'
+                      }`}
                     >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (s.platform) setActivePlatformFilter(s.platform);
-                          if (s.remote) setRemoteFilter(s.remote);
-                          if (s.jobType) setJobTypeFilter(s.jobType);
-                          if (s.minScore) setMatchScoreFilter(String(s.minScore));
-                          toast.success(`Applied search "${s.name}"`);
-                        }}
-                        className="text-left font-medium text-text-primary hover:text-primary truncate flex-1"
-                      >
-                        {s.name}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const updated = removeSavedSearch(s.id);
-                          setSavedSearches(updated);
-                          toast.success('Removed saved search');
-                        }}
-                        className="text-text-muted hover:text-rose-500 text-xs px-1"
-                      >
-                        ×
-                      </button>
-                    </div>
+                      {r.label}
+                    </button>
                   ))}
                 </div>
-              ) : (
-                <p className="text-[11px] text-text-muted italic">No saved search alerts yet.</p>
-              )}
-            </div>
-          </motion.div>
-        )}
+              </div>
+
+              {/* Match Score Threshold Chips */}
+              <div>
+                <span className="text-text-muted font-medium block mb-1.5">Match Quality:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {MATCH_THRESHOLDS.map((m) => (
+                    <button
+                      key={m.id}
+                      onClick={() => setMatchScoreFilter(m.id)}
+                      className={`px-2.5 py-1 rounded-lg border transition-all ${
+                        matchScoreFilter === m.id
+                          ? 'bg-primary text-white border-primary'
+                          : 'bg-surface-hover border-border text-text-secondary hover:text-text-primary'
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Saved Searches Management */}
+              <div className="pt-2 border-t border-border">
+
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-text-muted font-medium flex items-center gap-1">
+                    <Bookmark size={12} className="text-primary" /> Saved Search Alerts
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const check = subscriptionService.canSaveSearch(savedSearches.length);
+                      if (!check.allowed) {
+                        setUpgradeReason(check.reason);
+                        setShowUpgradeModal(true);
+                        return;
+                      }
+                      setShowSavedSearchModal(true);
+                    }}
+                    className="text-primary font-bold hover:underline text-[11px]"
+                  >
+                    + Save Current Filter
+                  </button>
+                </div>
+
+                {savedSearches.length > 0 ? (
+                  <div className="space-y-1">
+                    {savedSearches.map((s) => (
+                      <div
+                        key={s.id}
+                        className="flex items-center justify-between p-1.5 rounded-lg bg-surface-hover border border-border"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (s.platform) setActivePlatformFilter(s.platform);
+                            if (s.remote) setRemoteFilter(s.remote);
+                            if (s.jobType) setJobTypeFilter(s.jobType);
+                            if (s.minScore) setMatchScoreFilter(String(s.minScore));
+                            toast.success(`Applied search "${s.name}"`);
+                          }}
+                          className="text-left font-medium text-text-primary hover:text-primary truncate flex-1"
+                        >
+                          {s.name}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = removeSavedSearch(s.id);
+                            setSavedSearches(updated);
+                            toast.success('Removed saved search');
+                          }}
+                          className="text-text-muted hover:text-rose-500 text-xs px-1"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-text-muted italic">No saved search alerts yet.</p>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Today's Matching Summary Card (V4) */}
         {(() => {
