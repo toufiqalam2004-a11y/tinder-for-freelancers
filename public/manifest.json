@@ -1,0 +1,18 @@
+{
+  "short_name": "TF",
+  "name": "Tinder for Freelancers",
+  "description": "Discover freelance jobs and client opportunities that match your skills. Swipe. Match. Get Hired.",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#FAF7F2",
+  "theme_color": "#FAF7F2",
+  "display": "standalone",
+  "orientation": "portrait"
+}

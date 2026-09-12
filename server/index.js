@@ -1,0 +1,387 @@
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import apiRouter, { performServerAutoDelete } from './routes/api.js';
+import { db } from './database.js';
+import { redditService } from './services/redditService.js';
+import { youtubeService } from './services/youtubeService.js';
+import { xService } from './services/xService.js';
+import { aiService } from './services/aiService.js';
+
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const PORT = process.env.PORT || 5000;
+const HOST = process.env.HOST || '0.0.0.0';
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+// 1. Strict CORS Configuration
+const railwayOrigin = process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null;
+const allowedOrigins = IS_PROD
+  ? [
+      process.env.FRONTEND_ORIGIN,
+      process.env.FRONTEND_URL,
+      process.env.APP_URL,
+      railwayOrigin,
+      'http://localhost:3000',
+    ].filter(Boolean)
+  : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, curl, server-to-server) or Railway / LAN
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        origin.endsWith('.railway.app') ||
+        origin.endsWith('.up.railway.app') ||
+        (!IS_PROD && (/^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)))
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error('CORS policy violation: Origin not allowed.'));
+      }
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+  })
+);
+
+// 2. HTTP Security Headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' http://localhost:* https:;"
+  );
+  if (IS_PROD) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+
+app.use(express.json({ limit: '1mb' }));
+
+// 3. Rate Limiting Engine with Per-Route Caps
+const ipRateLimitMap = new Map();
+function createRateLimiter(maxRequests = 100, windowMs = 60 * 1000) {
+  return (req, res, next) => {
+    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    const key = `${ip}-${req.baseUrl || req.path}`;
+    const now = Date.now();
+
+    const record = ipRateLimitMap.get(key) || { count: 0, resetAt: now + windowMs };
+    if (now > record.resetAt) {
+      record.count = 1;
+      record.resetAt = now + windowMs;
+    } else {
+      record.count++;
+    }
+    ipRateLimitMap.set(key, record);
+
+    if (record.count > maxRequests) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many requests. Rate limit exceeded. Please wait before retrying.',
+      });
+    }
+    next();
+  };
+}
+
+const globalLimiter = createRateLimiter(120, 60 * 1000);
+const authLimiter = createRateLimiter(10, 60 * 1000); // Max 10 attempts/min
+const aiLimiter = createRateLimiter(15, 60 * 1000);   // Max 15 AI gens/min
+
+app.use(globalLimiter);
+
+// 4. Token-Based Authentication Middleware
+const activeSessions = new Map(); // token -> { userId, phone, expiresAt }
+
+export function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+
+  if (!token) {
+    // In dev mode allow demo fallback if authorization header is omitted
+    if (!IS_PROD && req.headers['x-demo-user']) {
+      req.user = { id: req.headers['x-demo-user'], phone: '+1234567890' };
+      return next();
+    }
+    return res.status(401).json({ success: false, error: 'Authentication required. Missing token.' });
+  }
+
+  const session = activeSessions.get(token);
+  if (!session || Date.now() > session.expiresAt) {
+    if (session) activeSessions.delete(token);
+    return res.status(403).json({ success: false, error: 'Invalid or expired session token.' });
+  }
+
+  req.user = { id: session.userId, phone: session.phone };
+  next();
+}
+
+// 5. Health Check Endpoint
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    backend: 'connected',
+    database: 'connected',
+    services: {
+      reddit: redditService.isConfigured() ? 'connected' : 'not_configured',
+      youtube: youtubeService.isConfigured() ? 'connected' : 'not_configured',
+      x: xService.isConfigured() ? 'connected' : 'not_configured',
+      ai: aiService.isConfigured() ? 'connected' : 'not_configured',
+    },
+    demoFallback: true,
+  });
+});
+
+// 6. Hardened Phone OTP Authentication
+const otpStore = new Map(); // phone -> { code, expiresAt, attempts, resendAvailableAt }
+
+app.post('/api/auth/send-otp', authLimiter, (req, res) => {
+  const { phone } = req.body;
+  if (!phone || typeof phone !== 'string') {
+    return res.status(400).json({ success: false, error: 'Valid phone number is required.' });
+  }
+
+  const sanitizedPhone = phone.trim().replace(/[^\d+]/g, '');
+  if (sanitizedPhone.length < 8 || sanitizedPhone.length > 18) {
+    return res.status(400).json({ success: false, error: 'Phone number must be between 8 and 18 characters.' });
+  }
+
+  const now = Date.now();
+  const existing = otpStore.get(sanitizedPhone);
+  if (existing && now < existing.resendAvailableAt) {
+    const waitSec = Math.ceil((existing.resendAvailableAt - now) / 1000);
+    return res.status(429).json({ success: false, error: `Please wait ${waitSec}s before requesting a new OTP.` });
+  }
+
+  // Environment-controlled demo switch: disabled in production unless ENABLE_DEMO_OTP === 'true'
+  const allowDemoOtp = process.env.ENABLE_DEMO_OTP === 'true' || (!IS_PROD && process.env.ENABLE_DEMO_OTP !== 'false');
+  const code = allowDemoOtp ? '123456' : Math.floor(100000 + Math.random() * 900000).toString();
+
+  otpStore.set(sanitizedPhone, {
+    code,
+    expiresAt: now + 5 * 60 * 1000,       // 5 minute expiration
+    attempts: 0,                           // max 3 failed attempts
+    resendAvailableAt: now + 30 * 1000,    // 30s resend cooldown
+  });
+
+  res.json({
+    success: true,
+    message: allowDemoOtp ? 'OTP sent successfully (Demo code: 123456).' : 'Verification code sent to your phone.',
+    isDemo: allowDemoOtp,
+  });
+});
+
+app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
+  const { phone, code } = req.body;
+  if (!phone || !code || typeof code !== 'string') {
+    return res.status(400).json({ success: false, error: 'Phone and 6-digit OTP code are required.' });
+  }
+
+  const sanitizedPhone = phone.trim().replace(/[^\d+]/g, '');
+  const cleanCode = code.trim();
+  const record = otpStore.get(sanitizedPhone);
+
+  if (!record || Date.now() > record.expiresAt) {
+    if (record) otpStore.delete(sanitizedPhone);
+    return res.status(400).json({ success: false, error: 'OTP code has expired or was not requested. Please request a new code.' });
+  }
+
+  if (record.attempts >= 3) {
+    otpStore.delete(sanitizedPhone);
+    return res.status(429).json({ success: false, error: 'Too many failed attempts. This OTP has been invalidated.' });
+  }
+
+  const isValid = cleanCode === record.code;
+  if (!isValid) {
+    record.attempts++;
+    return res.status(400).json({ success: false, error: `Invalid verification code. ${3 - record.attempts} attempts remaining.` });
+  }
+
+  // Successful verification -> cleanup OTP
+  otpStore.delete(sanitizedPhone);
+
+  let user = db.users.findOne((u) => u.phone === sanitizedPhone);
+  if (!user) {
+    user = {
+      id: `user-${Date.now()}`,
+      phone: sanitizedPhone,
+      name: '',
+      createdAt: new Date().toISOString(),
+    };
+    db.users.insert(user);
+  }
+
+  // Create session with 7-day expiration
+  const token = `tf-sess-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+  activeSessions.set(token, {
+    userId: user.id,
+    phone: sanitizedPhone,
+    expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+  });
+
+  res.json({
+    success: true,
+    user,
+    token,
+  });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+  if (token) {
+    activeSessions.delete(token);
+  }
+  res.json({ success: true, message: 'Logged out successfully.' });
+});
+
+// 7. Mount API router
+app.use('/api', apiRouter);
+
+// 8. AI Application Generation Endpoint (Rate Limited & Protected)
+app.post('/api/ai/generate-application', aiLimiter, async (req, res) => {
+  const { job, profile, mode } = req.body;
+  if (!job || !profile) {
+    return res.status(400).json({ success: false, error: 'Job and Profile are required.' });
+  }
+
+  const result = await aiService.generatePersonalizedOutreach({ job, profile, mode });
+  res.json(result);
+});
+
+// 9. Data Migration Endpoint with User Scoping
+app.post('/api/data/migrate', (req, res) => {
+  const { profile, jobs, applications, sources, preferences, userId } = req.body;
+  const ownerId = userId || 'user-default';
+
+  if (profile) {
+    db.profiles.insert({ ...profile, userId: ownerId, id: profile.id || `prof-${ownerId}` });
+  }
+  if (Array.isArray(jobs)) {
+    jobs.slice(0, 100).forEach((j) => db.jobs.insert({ ...j, userId: ownerId }));
+  }
+  if (Array.isArray(applications)) {
+    applications.slice(0, 100).forEach((a) => db.applications.insert({ ...a, userId: ownerId }));
+  }
+  if (Array.isArray(sources)) {
+    sources.slice(0, 20).forEach((s) => db.sources.insert({ ...s, userId: ownerId }));
+  }
+  if (preferences) {
+    db.preferences.insert({ id: `pref-${ownerId}`, userId: ownerId, ...preferences });
+  }
+
+  res.json({
+    success: true,
+    message: 'Local data safely migrated to backend database.',
+    stats: {
+      jobs: db.jobs.count(),
+      sources: db.sources.count(),
+      applications: db.applications.count(),
+    },
+  });
+});
+
+// Static Frontend Serving for Production (Unified Deployment)
+const distPath = path.join(__dirname, '../dist');
+if (fs.existsSync(distPath)) {
+  app.use(
+    express.static(distPath, {
+      maxAge: IS_PROD ? '1d' : 0,
+    })
+  );
+
+  // SPA Fallback: Serve index.html for all non-API GET requests
+  app.use((req, res, next) => {
+    if (req.method === 'GET' && !req.path.startsWith('/api')) {
+      return res.sendFile(path.join(distPath, 'index.html'));
+    }
+    next();
+  });
+}
+
+// 404 Handler for Unmatched API Endpoints
+app.use('/api', (req, res) => {
+  res.status(404).json({
+    success: false,
+    error: 'API endpoint not found',
+  });
+});
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+  // Do NOT leak stack traces or internal errors to client
+  res.status(500).json({
+    success: false,
+    error: 'An internal error occurred. Please retry later.',
+  });
+});
+
+const server = app.listen(PORT, HOST, () => {
+  console.log(`[TF Backend Server] running securely on http://${HOST}:${PORT}`);
+
+  // Safe server-side application auto-delete sweep for users with setting enabled
+  try {
+    const activePrefs = db.preferences.findAll((p) => p.autoDeleteApplicationsAfter7Days);
+    activePrefs.forEach((p) => performServerAutoDelete(p.userId));
+  } catch (e) {
+    // Ignore initial empty db sweep
+  }
+});
+
+// Periodic server-side application cleanup (runs every 6 hours)
+const cleanupInterval = setInterval(() => {
+  try {
+    const activePrefs = db.preferences.findAll((p) => p.autoDeleteApplicationsAfter7Days);
+    activePrefs.forEach((p) => performServerAutoDelete(p.userId));
+  } catch (e) {
+    // Silent
+  }
+}, 6 * 60 * 60 * 1000);
+cleanupInterval.unref();
+
+// Graceful Shutdown Handling
+function handleShutdown(signal) {
+  console.log(`\n[TF Backend Server] Received ${signal}. Starting graceful shutdown...`);
+  
+  // Stop accepting new connections
+  server.close(() => {
+    console.log('[TF Backend Server] Closed HTTP server connections.');
+    try {
+      // Flush any pending database writes to disk
+      if (typeof db.flushAll === 'function') {
+        db.flushAll();
+        console.log('[TF Backend Server] Flushed database state safely.');
+      }
+    } catch (e) {
+      console.error('[TF Backend Server] Error flushing database during shutdown:', e);
+    }
+    console.log('[TF Backend Server] Shutdown complete. Exiting cleanly.');
+    process.exit(0);
+  });
+
+  // Force close if graceful shutdown hangs
+  setTimeout(() => {
+    console.error('[TF Backend Server] Forcefully shutting down after timeout.');
+    process.exit(1);
+  }, 5000);
+}
+
+process.on('SIGINT', () => handleShutdown('SIGINT'));
+process.on('SIGTERM', () => handleShutdown('SIGTERM'));

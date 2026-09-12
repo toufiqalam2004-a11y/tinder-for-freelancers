@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="tfGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E11D48"/>
+      <stop offset="100%" stop-color="#BE123C"/>
+    </linearGradient>
+    <linearGradient id="warmBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FAF7F2"/>
+      <stop offset="100%" stop-color="#EFE8DF"/>
+    </linearGradient>
+    <filter id="subtleShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#BE123C" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  
+  <!-- Outer Rounded Badge -->
+  <rect width="512" height="512" rx="128" fill="url(#tfGradient)"/>
+  
+  <!-- Soft Inner Card -->
+  <rect x="56" y="56" width="400" height="400" rx="96" fill="#FAF7F2" opacity="0.12"/>
+  
+  <!-- Modern Geometric "TF" Monogram & Discovery Spark -->
+  <g filter="url(#subtleShadow)">
+    <!-- T Bar -->
+    <path d="M140 180 H280 V220 H230 V340 H190 V220 H140 Z" fill="#FFFFFF"/>
+    
+    <!-- F Bar -->
+    <path d="M280 200 H380 V240 H320 V265 H370 V300 H320 V340 H280 Z" fill="#FFFFFF"/>
+    
+    <!-- Match Discovery Star / Spark in top right -->
+    <path d="M375 130 C375 155 355 175 330 175 C355 175 375 195 375 220 C375 195 395 175 420 175 C395 175 375 155 375 130 Z" fill="#D4A373"/>
+  </g>
+</svg>
