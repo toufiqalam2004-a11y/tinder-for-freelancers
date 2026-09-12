@@ -37,36 +37,57 @@ export const apiClient = {
   /**
    * Request OTP
    */
-  async sendOtp(phone) {
+  async sendOtp(phone, details = {}) {
     try {
       const res = await fetch(`${API_BASE}/auth/send-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify({
+          phone,
+          countryCode: details.countryCode,
+          localNumber: details.localNumber,
+        }),
       });
-      return await res.json();
-    } catch {
-      // Fallback
-      return { success: true, message: 'Demo OTP: 123456', isDemo: true };
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: data.error || `HTTP ${res.status}: Failed to send OTP`,
+          status: res.status,
+        };
+      }
+      return data;
+    } catch (err) {
+      return { success: false, error: err.message || 'Network error sending OTP' };
     }
   },
 
   /**
    * Verify OTP
    */
-  async verifyOtp(phone, code) {
+  async verifyOtp(phone, code, details = {}) {
     try {
       const res = await fetch(`${API_BASE}/auth/verify-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, code }),
+        body: JSON.stringify({
+          phone,
+          code,
+          countryCode: details.countryCode,
+          localNumber: details.localNumber,
+        }),
       });
-      return await res.json();
-    } catch {
-      if (code === '123456') {
-        return { success: true, user: { phone }, token: 'demo-token' };
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: data.error || `HTTP ${res.status}: Failed to verify OTP`,
+          status: res.status,
+        };
       }
-      return { success: false, error: 'Invalid OTP code' };
+      return data;
+    } catch (err) {
+      return { success: false, error: err.message || 'Network error verifying OTP' };
     }
   },
 

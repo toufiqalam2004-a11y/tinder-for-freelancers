@@ -33,6 +33,8 @@ export function createUser(fields = {}) {
     name: fields.name || '',
     email: fields.email || '',
     phone: fields.phone || '',
+    countryCode: fields.countryCode || '+91',
+    localNumber: fields.localNumber || '',
     profession: fields.profession || '',
     primaryRole: fields.primaryRole || fields.profession || '',
     secondaryRoles: fields.secondaryRoles || [],
@@ -96,6 +98,12 @@ export function createUser(fields = {}) {
       negativeFeedback: [],
     },
     
+    outreachPreferences: fields.outreachPreferences || {
+      quickApplyEnabled: false,
+      contactPreference: 'both', // 'both' | 'email' | 'whatsapp'
+      autoIncludePortfolio: true,
+      autoIncludeCv: true,
+    },
     createdAt: fields.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };

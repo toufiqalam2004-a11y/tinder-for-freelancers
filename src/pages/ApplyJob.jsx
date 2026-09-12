@@ -36,6 +36,7 @@ import { aiService } from '../services/aiService';
 import { usageService } from '../services/usageService';
 import { subscriptionService } from '../services/subscriptionService';
 import { APPLICATION_TONES, APPLICATION_LENGTHS } from '../utils/constants';
+import { normalizeWhatsAppNumber } from '../utils/validators.js';
 
 const ApplyJob = () => {
   const { jobId } = useParams();
@@ -201,7 +202,7 @@ const ApplyJob = () => {
 
   const triggerWhatsApp = () => {
     const waText = aiService.generateWhatsAppMessage(job, profile, message);
-    const phone = contactInfo.phone ? contactInfo.phone.replace(/[^\d+]/g, '') : '';
+    const phone = contactInfo.phone ? normalizeWhatsAppNumber(contactInfo.phone) : '';
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(waText)}`, '_blank', 'noopener,noreferrer');
     setPendingSendType('WhatsApp');
     setShowSendConfirmation(true);

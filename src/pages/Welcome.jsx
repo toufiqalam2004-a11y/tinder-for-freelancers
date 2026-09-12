@@ -1,28 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Sparkles, Phone, ChevronDown, ArrowRight, CheckCircle2, 
-  HelpCircle, X, Shield, Flame, Send, Award, Check 
+  HelpCircle, X, Shield, Flame, Send, Award, Check, Search 
 } from 'lucide-react';
 import Button from '../components/Button';
 import { useAuth } from '../contexts/AuthContext';
 import { APP_CONFIG } from '../utils/constants';
+import { DEFAULT_COUNTRY_CODES, validatePhoneNumber } from '../utils/validators.js';
 
-const COUNTRY_CODES = [
-  { code: '+91', country: 'IN', label: 'India (+91)' },
-  { code: '+1', country: 'US', label: 'United States (+1)' },
-  { code: '+44', country: 'GB', label: 'United Kingdom (+44)' },
-  { code: '+971', country: 'AE', label: 'UAE (+971)' },
-  { code: '+61', country: 'AU', label: 'Australia (+61)' },
-  { code: '+49', country: 'DE', label: 'Germany (+49)' },
-  { code: '+33', country: 'FR', label: 'France (+33)' },
-  { code: '+81', country: 'JP', label: 'Japan (+81)' },
-  { code: '+86', country: 'CN', label: 'China (+86)' },
-  { code: '+65', country: 'SG', label: 'Singapore (+65)' },
-  { code: '+966', country: 'SA', label: 'Saudi Arabia (+966)' },
-  { code: '+234', country: 'NG', label: 'Nigeria (+234)' },
-];
+const COUNTRY_CODES = DEFAULT_COUNTRY_CODES;
 
 const FLOW_STEPS = [
   {
@@ -56,27 +44,67 @@ const Welcome = () => {
   const { sendOtp, authLoading, authError } = useAuth();
 
   const [countryCode, setCountryCode] = useState('+91');
+  const [selectedCountryIso, setSelectedCountryIso] = useState('IN');
+  const [countrySearch, setCountrySearch] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [showLoginForm, setShowLoginForm] = useState(false);
   const [error, setError] = useState('');
 
+  const selectedCountry = useMemo(() => {
+    return (
+      DEFAULT_COUNTRY_CODES.find(
+        (c) => c.code === countryCode && (selectedCountryIso ? c.country === selectedCountryIso : true)
+      ) ||
+      DEFAULT_COUNTRY_CODES.find((c) => c.code === countryCode) ||
+      DEFAULT_COUNTRY_CODES[0]
+    );
+  }, [countryCode, selectedCountryIso]);
+
+  const filteredCountryCodes = useMemo(() => {
+    if (!countrySearch.trim()) return DEFAULT_COUNTRY_CODES;
+    const q = countrySearch.toLowerCase().trim();
+    return DEFAULT_COUNTRY_CODES.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.code.includes(q) ||
+        c.country.toLowerCase().includes(q)
+    );
+  }, [countrySearch]);
+
   const handleContinue = async (e) => {
     e.preventDefault();
 
-    const digits = phoneNumber.replace(/\D/g, '');
-    if (!digits || digits.length < 6) {
-      setError('Please enter a valid phone number');
-      return;
+    const cleanNumber = phoneNumber.replace(/\s+/g, '');
+    if (!/^[0-9]{10}$/.test(cleanNumber)) {
+      if (cleanNumber.length < 10) {
+        setError(`Phone number has only ${cleanNumber.length} digits. Exactly 10 digits required.`);
+      } else if (cleanNumber.length > 10) {
+        setError(`Phone number has ${cleanNumber.length} digits. Exactly 10 digits required.`);
+      } else {
+        setError('Phone number must be exactly 10 digits (0-9).');
+      }
+      return; // Absolute block: do NOT call the OTP API
+    }
+
+    // Strict 10-digit validation guard
+    const validation = validatePhoneNumber(countryCode, cleanNumber);
+    if (!validation.isValid) {
+      setError(validation.error);
+      return; // Do NOT call the OTP API
     }
 
     setError('');
-    const fullPhone = `${countryCode}${digits}`;
-    const result = await sendOtp(fullPhone);
+    const result = await sendOtp(validation.normalizedNumber, {
+      countryCode: validation.countryCode,
+      localNumber: validation.localNumber,
+    });
 
-    if (result.success) {
+    if (result && result.success) {
       navigate('/verify-otp');
+    } else if (result && result.error) {
+      setError(result.error);
     }
   };
 
@@ -210,15 +238,20 @@ const Welcome = () => {
               </div>
 
               <div className="flex gap-2">
-                {/* Country code selector */}
+                {/* Searchable Country code selector */}
                 <div className="relative">
                   <button
                     type="button"
-                    onClick={() => setShowDropdown(!showDropdown)}
-                    className="flex items-center gap-1 bg-surface-hover border border-border rounded-xl px-3 py-3 text-text-primary text-sm font-medium hover:border-primary/50 transition-colors min-w-[88px]"
+                    onClick={() => {
+                      setShowDropdown(!showDropdown);
+                      setCountrySearch('');
+                    }}
+                    className="flex items-center gap-1.5 bg-surface-hover border border-border rounded-xl px-2.5 py-3 text-text-primary text-sm font-medium hover:border-primary/50 transition-colors min-w-[105px]"
+                    title="Select country calling code"
                   >
-                    {countryCode}
-                    <ChevronDown size={14} className="text-text-muted" />
+                    <span className="text-base">{selectedCountry.flag}</span>
+                    <span className="font-mono text-xs font-semibold">{countryCode}</span>
+                    <ChevronDown size={14} className="text-text-muted ml-auto" />
                   </button>
 
                   {showDropdown && (
@@ -230,40 +263,89 @@ const Welcome = () => {
                       <motion.div
                         initial={{ opacity: 0, y: -4 }}
                         animate={{ opacity: 1, y: 0 }}
-                        className="absolute top-full left-0 mt-1 z-50 bg-surface border border-border rounded-xl shadow-elevated w-56 max-h-52 overflow-y-auto"
+                        className="absolute top-full left-0 mt-1 z-50 bg-surface border border-border rounded-xl shadow-elevated w-72 max-h-64 flex flex-col overflow-hidden"
                       >
-                        {COUNTRY_CODES.map((cc) => (
-                          <button
-                            key={cc.code}
-                            type="button"
-                            onClick={() => {
-                              setCountryCode(cc.code);
-                              setShowDropdown(false);
-                            }}
-                            className={`w-full text-left px-3.5 py-2 text-xs transition-colors ${
-                              countryCode === cc.code
-                                ? 'bg-primary/10 text-primary font-semibold'
-                                : 'text-text-primary hover:bg-surface-hover'
-                            }`}
-                          >
-                            <span className="font-medium">{cc.code}</span>
-                            <span className="text-text-muted ml-2">{cc.country}</span>
-                          </button>
-                        ))}
+                        {/* Search Header */}
+                        <div className="p-2 border-b border-border bg-surface-hover/50">
+                          <div className="relative">
+                            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
+                            <input
+                              type="text"
+                              placeholder="Search country or code..."
+                              value={countrySearch}
+                              onChange={(e) => setCountrySearch(e.target.value)}
+                              className="w-full bg-surface border border-border rounded-lg pl-8 pr-3 py-1.5 text-xs text-text-primary placeholder:text-text-muted outline-none focus:border-primary"
+                              autoFocus
+                            />
+                          </div>
+                        </div>
+
+                        {/* Scrollable Country List */}
+                        <div className="overflow-y-auto max-h-52 divide-y divide-border/40">
+                          {filteredCountryCodes.length === 0 ? (
+                            <div className="p-3 text-center text-xs text-text-muted">
+                              No matching country found
+                            </div>
+                          ) : (
+                            filteredCountryCodes.map((cc) => {
+                              const isSelected =
+                                countryCode === cc.code && selectedCountry.country === cc.country;
+                              return (
+                                <button
+                                  key={`${cc.country}-${cc.code}`}
+                                  type="button"
+                                  onClick={() => {
+                                    setCountryCode(cc.code);
+                                    setSelectedCountryIso(cc.country);
+                                    setShowDropdown(false);
+                                    setCountrySearch('');
+                                  }}
+                                  className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left transition-colors ${
+                                    isSelected
+                                      ? 'bg-primary/10 text-primary font-bold'
+                                      : 'text-text-primary hover:bg-surface-hover'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="text-base flex-shrink-0">{cc.flag}</span>
+                                    <span className="truncate">{cc.name}</span>
+                                  </div>
+                                  <span className="font-mono text-text-muted font-semibold ml-2 flex-shrink-0">
+                                    {cc.code}
+                                  </span>
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
                       </motion.div>
                     </>
                   )}
                 </div>
 
-                {/* Phone number input */}
+                {/* Phone number input - Exact 10 digits without silent truncation */}
                 <input
                   type="tel"
                   inputMode="numeric"
-                  placeholder="Enter phone number"
+                  placeholder="10-digit mobile number"
                   value={phoneNumber}
                   onChange={(e) => {
-                    setPhoneNumber(e.target.value);
-                    setError('');
+                    const val = e.target.value;
+                    setPhoneNumber(val);
+                    const cleaned = val.replace(/\s+/g, '');
+                    if (cleaned.length > 0) {
+                      if (/[^\d]/.test(cleaned)) {
+                        setError('Phone number must contain digits only.');
+                      } else if (cleaned.length < 10) {
+                        setError(`Phone number has only ${cleaned.length} digits. Exactly 10 digits required.`);
+                      } else if (cleaned.length > 10) {
+                        setError(`Phone number has ${cleaned.length} digits. Exactly 10 digits required.`);
+                      } else {
+                        setError('');
+                      }
+                    } else {
+                      setError('');
+                    }
                   }}
                   className="flex-1 bg-surface-hover border border-border rounded-xl px-4 py-3 text-text-primary placeholder:text-text-muted outline-none transition-all focus:border-primary focus:ring-1 focus:ring-primary/30 text-sm"
                   autoComplete="tel"
@@ -271,9 +353,28 @@ const Welcome = () => {
                 />
               </div>
 
+              {/* Digits counter info */}
+              <div className="flex justify-between items-center px-1 text-[11px] text-text-muted">
+                <span className="truncate max-w-[200px]">
+                  Country: <strong className="text-text-primary font-medium">{selectedCountry.name} ({countryCode})</strong>
+                </span>
+                <span
+                  className={
+                    phoneNumber.replace(/\s+/g, '').length === 10 &&
+                    /^[0-9]{10}$/.test(phoneNumber.replace(/\s+/g, ''))
+                      ? 'text-emerald-500 font-bold'
+                      : phoneNumber.length > 0
+                      ? 'text-rose-500 font-medium'
+                      : ''
+                  }
+                >
+                  {phoneNumber.replace(/\s+/g, '').length}/10 digits
+                </span>
+              </div>
+
               {/* Error */}
               {(error || authError) && (
-                <p className="text-rose-500 text-xs mt-1">{error || authError}</p>
+                <p className="text-rose-500 text-xs mt-1 font-medium">{error || authError}</p>
               )}
 
               {/* Continue button */}
@@ -281,6 +382,7 @@ const Welcome = () => {
                 type="submit"
                 variant="primary"
                 fullWidth
+                disabled={!/^[0-9]{10}$/.test(phoneNumber.replace(/\s+/g, '')) || authLoading}
                 loading={authLoading}
                 className="mt-2"
                 icon={<Phone size={16} />}

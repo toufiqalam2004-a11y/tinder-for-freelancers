@@ -1,90 +1,109 @@
 import { createContext, useContext, useState, useCallback } from 'react';
 import { getAuth, setAuth as persistAuth } from '../data/storage.js';
+import { apiClient } from '../services/apiClient.js';
+import { validatePhoneNumber } from '../utils/validators.js';
 
 const AuthContext = createContext(null);
 
-// --- Auth Service Abstraction ---
-// Replace this with Firebase Phone Auth / Twilio / any real OTP provider.
-// The rest of the app only calls sendOtp() and verifyOtp() — it never
-// knows which provider is behind them.
-
 const DEMO_OTP = '123456';
 
-const authService = {
-  /**
-   * Send OTP to the given phone number.
-   * In demo mode this is a no-op that always succeeds.
-   * Replace with: firebase.auth().signInWithPhoneNumber(phone, appVerifier)
-   */
-  sendOtp: async (phone) => {
-    // Simulate network delay
-    await new Promise((r) => setTimeout(r, 800));
-    // In production, return a verification ID / confirmation result
-    return { success: true, verificationId: 'demo-verification' };
-  },
-
-  /**
-   * Verify the OTP code.
-   * In demo mode accepts '123456'.
-   * Replace with: confirmationResult.confirm(code)
-   */
-  verifyOtp: async (verificationId, code) => {
-    await new Promise((r) => setTimeout(r, 600));
-    if (code === DEMO_OTP) {
-      return { success: true, user: { phone: verificationId } };
-    }
-    return { success: false, error: 'Invalid OTP. Please try again.' };
-  },
-};
-
 export function AuthProvider({ children }) {
+  const initialAuth = getAuth() || {};
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return getAuth().isAuthenticated;
+    return !!initialAuth.isAuthenticated;
   });
   const [phone, setPhone] = useState(() => {
-    return getAuth().phone || '';
+    return initialAuth.phone || '';
+  });
+  const [countryCode, setCountryCode] = useState(() => {
+    return initialAuth.countryCode || '+91';
+  });
+  const [localNumber, setLocalNumber] = useState(() => {
+    return initialAuth.localNumber || '';
   });
   const [verificationId, setVerificationId] = useState(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
 
-  const sendOtp = useCallback(async (phoneNumber) => {
+  const sendOtp = useCallback(async (phoneNumber, details = {}) => {
     setAuthLoading(true);
     setAuthError('');
+
+    const targetLocal = details.localNumber || phoneNumber;
+    const targetCc = details.countryCode || countryCode || '+91';
+    
+    // Frontend validation guard: exact 10 digits
+    const validation = validatePhoneNumber(targetCc, targetLocal);
+    if (!validation.isValid) {
+      setAuthError(validation.error);
+      setAuthLoading(false);
+      return { success: false, error: validation.error };
+    }
+
     try {
-      const result = await authService.sendOtp(phoneNumber);
+      const result = await apiClient.sendOtp(validation.normalizedNumber, {
+        countryCode: validation.countryCode,
+        localNumber: validation.localNumber,
+      });
+
       if (result.success) {
-        setPhone(phoneNumber);
-        setVerificationId(result.verificationId);
+        const finalPhone = result.phone || validation.normalizedNumber;
+        const finalCc = result.countryCode || validation.countryCode;
+        const finalLocal = result.localNumber || validation.localNumber;
+
+        setPhone(finalPhone);
+        setCountryCode(finalCc);
+        setLocalNumber(finalLocal);
+        setVerificationId(result.verificationId || 'otp-session');
+        persistAuth({
+          isAuthenticated: false,
+          phone: finalPhone,
+          countryCode: finalCc,
+          localNumber: finalLocal,
+        });
+      } else {
+        setAuthError(result.error || 'Failed to send OTP.');
       }
       return result;
     } catch (e) {
-      setAuthError('Failed to send OTP. Please try again.');
-      return { success: false, error: e.message };
+      const errMsg = e.message || 'Failed to send OTP. Please try again.';
+      setAuthError(errMsg);
+      return { success: false, error: errMsg };
     } finally {
       setAuthLoading(false);
     }
-  }, []);
+  }, [countryCode]);
 
   const verifyOtp = useCallback(async (code) => {
     setAuthLoading(true);
     setAuthError('');
     try {
-      const result = await authService.verifyOtp(phone, code);
+      const result = await apiClient.verifyOtp(phone, code, {
+        countryCode,
+        localNumber,
+      });
+
       if (result.success) {
         setIsAuthenticated(true);
-        persistAuth({ isAuthenticated: true, phone });
+        persistAuth({
+          isAuthenticated: true,
+          phone,
+          countryCode,
+          localNumber,
+          token: result.token,
+        });
       } else {
-        setAuthError(result.error);
+        setAuthError(result.error || 'Invalid OTP. Please try again.');
       }
       return result;
     } catch (e) {
-      setAuthError('Verification failed. Please try again.');
-      return { success: false, error: e.message };
+      const errMsg = e.message || 'Verification failed. Please try again.';
+      setAuthError(errMsg);
+      return { success: false, error: errMsg };
     } finally {
       setAuthLoading(false);
     }
-  }, [phone]);
+  }, [phone, countryCode, localNumber]);
 
   const logout = useCallback(() => {
     setIsAuthenticated(false);
@@ -98,6 +117,8 @@ export function AuthProvider({ children }) {
       value={{
         isAuthenticated,
         phone,
+        countryCode,
+        localNumber,
         verificationId,
         authLoading,
         authError,

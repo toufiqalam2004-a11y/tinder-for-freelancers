@@ -9,7 +9,7 @@ const OTP_LENGTH = 6;
 
 const OTPVerification = () => {
   const navigate = useNavigate();
-  const { phone, verifyOtp, sendOtp, authLoading, authError, DEMO_OTP } = useAuth();
+  const { phone, countryCode, localNumber, verifyOtp, sendOtp, authLoading, authError, DEMO_OTP } = useAuth();
 
   const [otp, setOtp] = useState(Array(OTP_LENGTH).fill(''));
   const [resendTimer, setResendTimer] = useState(30);
@@ -100,12 +100,14 @@ const OTPVerification = () => {
     setCanResend(false);
     setResendTimer(30);
     setOtp(Array(OTP_LENGTH).fill(''));
-    await sendOtp(phone);
+    await sendOtp(phone, { countryCode, localNumber });
     inputRefs.current[0]?.focus();
   };
 
-  // Mask phone number: +91****1234
-  const maskedPhone = phone
+  // Mask phone number: +91 •••• 1234
+  const maskedPhone = localNumber
+    ? `${countryCode || '+91'} •••• ${localNumber.slice(-4)}`
+    : phone
     ? phone.slice(0, 3) + '••••' + phone.slice(-4)
     : '';
 

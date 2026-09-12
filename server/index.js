@@ -10,6 +10,7 @@ import { redditService } from './services/redditService.js';
 import { youtubeService } from './services/youtubeService.js';
 import { xService } from './services/xService.js';
 import { aiService } from './services/aiService.js';
+import { validatePhoneNumber, DEFAULT_COUNTRY_CODES } from '../src/utils/validators.js';
 
 dotenv.config();
 
@@ -101,7 +102,7 @@ function createRateLimiter(maxRequests = 100, windowMs = 60 * 1000) {
 }
 
 const globalLimiter = createRateLimiter(120, 60 * 1000);
-const authLimiter = createRateLimiter(10, 60 * 1000); // Max 10 attempts/min
+const authLimiter = createRateLimiter(IS_PROD ? 15 : 60, 60 * 1000); // Max 15/min prod, 60/min dev
 const aiLimiter = createRateLimiter(15, 60 * 1000);   // Max 15 AI gens/min
 
 app.use(globalLimiter);
@@ -150,19 +151,99 @@ app.get('/api/health', (req, res) => {
 });
 
 // 6. Hardened Phone OTP Authentication
-const otpStore = new Map(); // phone -> { code, expiresAt, attempts, resendAvailableAt }
+const otpStore = new Map(); // phone -> { code, countryCode, localNumber, expiresAt, attempts, resendAvailableAt }
+
+/**
+ * Strict Phone Number Validator for OTP endpoints
+ * The local number MUST be exactly 10 digits.
+ * Rejects fewer than 10 digits, more than 10 digits (including 11 digits), and non-numeric characters.
+ * Absolutely NO slicing or truncation.
+ * Accepts:
+ *   { localNumber, countryCode } OR
+ *   { phone, countryCode } OR
+ *   { phone }
+ */
+function parseAndValidatePhoneRequest(body = {}) {
+  let { countryCode, localNumber, phone } = body;
+
+  // 1. If localNumber is explicitly provided:
+  if (localNumber !== undefined && localNumber !== null) {
+    const localStr = String(localNumber).trim();
+    // Strictly reject if contains spaces, hyphens, non-digits, or not exactly 10 digits
+    if (!/^[0-9]{10}$/.test(localStr)) {
+      return {
+        isValid: false,
+        error: 'Phone number must be exactly 10 digits.',
+      };
+    }
+    const codeStr = countryCode ? String(countryCode).trim() : '+91';
+    return validatePhoneNumber(codeStr, localStr);
+  }
+
+  // 2. If phone is provided:
+  if (phone !== undefined && phone !== null) {
+    const raw = String(phone).trim();
+
+    // Check if phone has a country code prefix (e.g. +91...)
+    if (raw.startsWith('+')) {
+      const sortedCodes = [...DEFAULT_COUNTRY_CODES]
+        .map((c) => c.code)
+        .sort((a, b) => b.length - a.length);
+
+      let matchedCode = null;
+      let matchedLocal = null;
+
+      for (const code of sortedCodes) {
+        if (raw.startsWith(code)) {
+          matchedCode = code;
+          matchedLocal = raw.slice(code.length);
+          break;
+        }
+      }
+
+      if (matchedCode && matchedLocal) {
+        // Strictly check matchedLocal: must be exactly 10 digits, NO slicing, NO truncation
+        if (!/^[0-9]{10}$/.test(matchedLocal)) {
+          return {
+            isValid: false,
+            error: 'Phone number must be exactly 10 digits.',
+          };
+        }
+        return validatePhoneNumber(matchedCode, matchedLocal);
+      }
+
+      // If unrecognized '+' prefix or unrecognized country code:
+      return {
+        isValid: false,
+        error: 'Unrecognized country calling code or invalid phone format.',
+      };
+    } else {
+      // Raw string without '+'
+      // Must be EXACTLY 10 digits. No slicing, no truncation!
+      if (/^[0-9]{10}$/.test(raw)) {
+        return validatePhoneNumber(countryCode || '+91', raw);
+      } else {
+        return {
+          isValid: false,
+          error: 'Phone number must be exactly 10 digits.',
+        };
+      }
+    }
+  }
+
+  return {
+    isValid: false,
+    error: 'Phone number must be exactly 10 digits.',
+  };
+}
 
 app.post('/api/auth/send-otp', authLimiter, (req, res) => {
-  const { phone } = req.body;
-  if (!phone || typeof phone !== 'string') {
-    return res.status(400).json({ success: false, error: 'Valid phone number is required.' });
+  const validation = parseAndValidatePhoneRequest(req.body);
+  if (!validation.isValid) {
+    return res.status(400).json({ success: false, error: validation.error });
   }
 
-  const sanitizedPhone = phone.trim().replace(/[^\d+]/g, '');
-  if (sanitizedPhone.length < 8 || sanitizedPhone.length > 18) {
-    return res.status(400).json({ success: false, error: 'Phone number must be between 8 and 18 characters.' });
-  }
-
+  const sanitizedPhone = validation.normalizedNumber;
   const now = Date.now();
   const existing = otpStore.get(sanitizedPhone);
   if (existing && now < existing.resendAvailableAt) {
@@ -176,6 +257,8 @@ app.post('/api/auth/send-otp', authLimiter, (req, res) => {
 
   otpStore.set(sanitizedPhone, {
     code,
+    countryCode: validation.countryCode,
+    localNumber: validation.localNumber,
     expiresAt: now + 5 * 60 * 1000,       // 5 minute expiration
     attempts: 0,                           // max 3 failed attempts
     resendAvailableAt: now + 30 * 1000,    // 30s resend cooldown
@@ -184,17 +267,25 @@ app.post('/api/auth/send-otp', authLimiter, (req, res) => {
   res.json({
     success: true,
     message: allowDemoOtp ? 'OTP sent successfully (Demo code: 123456).' : 'Verification code sent to your phone.',
+    phone: sanitizedPhone,
+    countryCode: validation.countryCode,
+    localNumber: validation.localNumber,
     isDemo: allowDemoOtp,
   });
 });
 
 app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
-  const { phone, code } = req.body;
-  if (!phone || !code || typeof code !== 'string') {
+  const { code } = req.body;
+  const validation = parseAndValidatePhoneRequest(req.body);
+  if (!validation.isValid) {
+    return res.status(400).json({ success: false, error: validation.error });
+  }
+
+  if (!code || typeof code !== 'string') {
     return res.status(400).json({ success: false, error: 'Phone and 6-digit OTP code are required.' });
   }
 
-  const sanitizedPhone = phone.trim().replace(/[^\d+]/g, '');
+  const sanitizedPhone = validation.normalizedNumber;
   const cleanCode = code.trim();
   const record = otpStore.get(sanitizedPhone);
 
@@ -222,10 +313,16 @@ app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
     user = {
       id: `user-${Date.now()}`,
       phone: sanitizedPhone,
+      countryCode: validation.countryCode,
+      localNumber: validation.localNumber,
       name: '',
       createdAt: new Date().toISOString(),
     };
     db.users.insert(user);
+  } else if (!user.countryCode || !user.localNumber) {
+    user.countryCode = validation.countryCode;
+    user.localNumber = validation.localNumber;
+    db.users.update(user.id, user);
   }
 
   // Create session with 7-day expiration
@@ -233,12 +330,20 @@ app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
   activeSessions.set(token, {
     userId: user.id,
     phone: sanitizedPhone,
+    countryCode: validation.countryCode,
+    localNumber: validation.localNumber,
     expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
   });
 
   res.json({
     success: true,
-    user,
+    user: {
+      id: user.id,
+      phone: sanitizedPhone,
+      countryCode: validation.countryCode,
+      localNumber: validation.localNumber,
+      name: user.name,
+    },
     token,
   });
 });
