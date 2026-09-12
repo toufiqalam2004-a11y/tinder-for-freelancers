@@ -73,24 +73,40 @@ const Welcome = () => {
     );
   }, [countrySearch]);
 
+  const phoneValidation = useMemo(() => {
+    return validatePhoneNumber(countryCode, phoneNumber);
+  }, [countryCode, phoneNumber]);
+  const isPhoneValid = phoneValidation.isValid;
+
+  const handlePhoneChange = (raw) => {
+    // Strip non-digits immediately
+    let cleaned = String(raw || '').replace(/\D/g, '');
+
+    // If country code is India (+91) and user pastes with country calling code prefix (e.g. 919876543210)
+    if (countryCode === '+91' && cleaned.length === 12 && cleaned.startsWith('91')) {
+      cleaned = cleaned.slice(2);
+    }
+
+    // Maximum length strictly 10 digits
+    cleaned = cleaned.slice(0, 10);
+    setPhoneNumber(cleaned);
+    setError('');
+  };
+
   const handleContinue = async (e) => {
     e.preventDefault();
 
-    if (phoneNumber.length !== 10 || !/^[0-9]{10}$/.test(phoneNumber)) {
-      return;
-    }
-
-    // Strict 10-digit validation guard
-    const validation = validatePhoneNumber(countryCode, phoneNumber);
-    if (!validation.isValid) {
-      setError(validation.error);
+    if (!isPhoneValid) {
+      if (phoneValidation.error) {
+        setError(phoneValidation.error);
+      }
       return;
     }
 
     setError('');
-    const result = await sendOtp(validation.normalizedNumber, {
-      countryCode: validation.countryCode,
-      localNumber: validation.localNumber,
+    const result = await sendOtp(phoneValidation.normalizedNumber, {
+      countryCode: phoneValidation.countryCode,
+      localNumber: phoneValidation.localNumber,
     });
 
     if (result && result.success) {
@@ -323,10 +339,11 @@ const Welcome = () => {
                   maxLength={10}
                   placeholder="Enter 10-digit number"
                   value={phoneNumber}
-                  onChange={(e) => {
-                    const val = e.target.value.replace(/\D/g, '').slice(0, 10);
-                    setPhoneNumber(val);
-                    setError('');
+                  onChange={(e) => handlePhoneChange(e.target.value)}
+                  onPaste={(e) => {
+                    e.preventDefault();
+                    const pasted = e.clipboardData.getData('text');
+                    handlePhoneChange(pasted);
                   }}
                   className="flex-1 bg-surface-hover border border-border rounded-xl px-4 py-3 text-text-primary placeholder:text-text-muted outline-none transition-all focus:border-primary focus:ring-1 focus:ring-primary/30 text-sm font-mono tracking-wide"
                   autoComplete="tel"
@@ -341,7 +358,7 @@ const Welcome = () => {
                 </span>
                 <span
                   className={
-                    phoneNumber.length === 10
+                    isPhoneValid
                       ? 'text-emerald-500 font-bold'
                       : 'text-text-muted font-medium'
                   }
@@ -360,7 +377,7 @@ const Welcome = () => {
                 type="submit"
                 variant="primary"
                 fullWidth
-                disabled={phoneNumber.length !== 10 || authLoading}
+                disabled={!isPhoneValid || authLoading}
                 loading={authLoading}
                 className="mt-2"
                 icon={<Phone size={16} />}

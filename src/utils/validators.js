@@ -110,13 +110,18 @@ export const DEFAULT_COUNTRY_CODES = [
   { code: '+54', country: 'AR', name: 'Argentina', flag: '🇦🇷', region: 'Other' },
 ];
 
+export const INDIAN_PHONE_REGEX = /^[6-9][0-9]{9}$/;
+
 /**
  * Validates a local phone number and country calling code according to strict rules:
  * - Country code is separate from the 10-digit local number.
  * - Local phone number must be exactly 10 digits.
  * - Reject fewer than 10 digits.
  * - Reject more than 10 digits.
- * - Reject non-numeric characters.
+ * - Reject non-numeric characters, letters, spaces, and special characters.
+ * - When country code is India (+91), the local number MUST match ^[6-9][0-9]{9}$
+ *   (starts ONLY with 6, 7, 8, or 9; rejects 0, 1, 2, 3, 4, 5).
+ * - For non-Indian countries, standard 10-digit numeric validation applies without the 6-9 restriction.
  */
 export function validatePhoneNumber(countryCode = '+91', localNumber = '') {
   if (localNumber === undefined || localNumber === null || typeof localNumber !== 'string') {
@@ -126,18 +131,24 @@ export function validatePhoneNumber(countryCode = '+91', localNumber = '') {
     };
   }
 
-  // Strip only harmless formatting spaces
-  const cleaned = localNumber.replace(/\s+/g, '');
-
-  if (!cleaned) {
+  // Reject spaces
+  if (/\s/.test(localNumber)) {
     return {
       isValid: false,
-      error: 'Phone number must be exactly 10 digits.',
+      error: 'Phone number must not contain spaces.',
     };
   }
 
-  // Reject non-numeric characters, fewer than 10 digits, or more than 10 digits
-  if (!/^[0-9]{10}$/.test(cleaned)) {
+  // Reject letters, +, -, brackets, dots, or any non-digit special characters
+  if (/[^0-9]/.test(localNumber)) {
+    return {
+      isValid: false,
+      error: 'Phone number must contain only numeric digits.',
+    };
+  }
+
+  // Must contain exactly 10 digits
+  if (localNumber.length !== 10) {
     return {
       isValid: false,
       error: 'Phone number must be exactly 10 digits.',
@@ -146,12 +157,24 @@ export function validatePhoneNumber(countryCode = '+91', localNumber = '') {
 
   const cleanCountryCode = (countryCode || '+91').trim().replace(/[^\d+]/g, '') || '+91';
   const prefix = cleanCountryCode.startsWith('+') ? cleanCountryCode : `+${cleanCountryCode}`;
-  const normalizedNumber = `${prefix}${cleaned}`;
+  const isIndia = prefix === '+91';
+
+  // Strict Indian rule: ^[6-9][0-9]{9}$
+  if (isIndia) {
+    if (!INDIAN_PHONE_REGEX.test(localNumber)) {
+      return {
+        isValid: false,
+        error: 'Indian phone number must start with 6, 7, 8, or 9.',
+      };
+    }
+  }
+
+  const normalizedNumber = `${prefix}${localNumber}`;
   const whatsappNumber = normalizedNumber.replace(/\D/g, '');
 
   return {
     isValid: true,
-    localNumber: cleaned,
+    localNumber,
     countryCode: prefix,
     normalizedNumber,
     whatsappNumber,

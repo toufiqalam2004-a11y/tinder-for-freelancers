@@ -182,8 +182,14 @@ function parseAndValidatePhoneRequest(body = {}) {
 
   // 1. If localNumber is explicitly provided:
   if (localNumber !== undefined && localNumber !== null) {
-    const localStr = String(localNumber).trim();
+    const localStr = String(localNumber);
     // Strictly reject if contains spaces, hyphens, non-digits, or not exactly 10 digits
+    if (/\s/.test(localStr)) {
+      return {
+        isValid: false,
+        error: 'Phone number must not contain spaces.',
+      };
+    }
     if (!/^[0-9]{10}$/.test(localStr)) {
       return {
         isValid: false,
@@ -216,7 +222,13 @@ function parseAndValidatePhoneRequest(body = {}) {
       }
 
       if (matchedCode && matchedLocal) {
-        // Strictly check matchedLocal: must be exactly 10 digits, NO slicing, NO truncation
+        // Strictly check matchedLocal: must be exactly 10 digits, NO slicing, NO truncation, no spaces/special chars
+        if (/\s/.test(matchedLocal)) {
+          return {
+            isValid: false,
+            error: 'Phone number must not contain spaces.',
+          };
+        }
         if (!/^[0-9]{10}$/.test(matchedLocal)) {
           return {
             isValid: false,
@@ -233,15 +245,19 @@ function parseAndValidatePhoneRequest(body = {}) {
       };
     } else {
       // Raw string without '+'
-      // Must be EXACTLY 10 digits. No slicing, no truncation!
-      if (/^[0-9]{10}$/.test(raw)) {
-        return validatePhoneNumber(countryCode || '+91', raw);
-      } else {
+      if (/\s/.test(raw)) {
+        return {
+          isValid: false,
+          error: 'Phone number must not contain spaces.',
+        };
+      }
+      if (!/^[0-9]{10}$/.test(raw)) {
         return {
           isValid: false,
           error: 'Phone number must be exactly 10 digits.',
         };
       }
+      return validatePhoneNumber(countryCode || '+91', raw);
     }
   }
 

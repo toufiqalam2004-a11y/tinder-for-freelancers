@@ -4,7 +4,7 @@
  */
 
 import { db } from '../server/database.js';
-import { validatePhoneNumber, normalizeWhatsAppNumber } from '../src/utils/validators.js';
+import { validatePhoneNumber, normalizeWhatsAppNumber, INDIAN_PHONE_REGEX } from '../src/utils/validators.js';
 import { extractContactInfo, hasDirectContact } from '../src/utils/contactExtractor.js';
 import { calculateProMatch } from '../src/services/proMatchEngine.js';
 import { EmailOutreachAdapter } from '../src/services/outreach/emailAdapter.js';
@@ -406,12 +406,83 @@ async function runTests() {
   assert(fallbackMsg.includes('Jordan') && fallbackMsg.includes('Lottie Animator'), 'Deterministic fallback message generated without AI hallucination');
 
   // ----------------------------------------------------
-  // TEST 28: Phone auth: 10-digit validation strictly enforced
+  // TEST 28: Phone auth: Indian phone number validation strictly enforced (^[6-9][0-9]{9}$)
   // ----------------------------------------------------
-  const valGood = validatePhoneNumber('+91', '9876543299');
-  const valBadShort = validatePhoneNumber('+91', '12345');
-  const valBadAlpha = validatePhoneNumber('+91', '98765abcde');
-  assert(valGood.isValid && !valBadShort.isValid && !valBadAlpha.isValid, 'Phone validation strictly validates 10 numeric digits and country code');
+  // PASS cases:
+  const pass98 = validatePhoneNumber('+91', '9876543210');
+  const pass61 = validatePhoneNumber('+91', '6123456789');
+  const pass71 = validatePhoneNumber('+91', '7123456789');
+  const pass81 = validatePhoneNumber('+91', '8123456789');
+  const pass91 = validatePhoneNumber('+91', '9123456789');
+  const allPass = pass98.isValid && pass61.isValid && pass71.isValid && pass81.isValid && pass91.isValid;
+
+  // REJECT cases:
+  const rejStarts5 = validatePhoneNumber('+91', '5123456789');
+  const rejStarts0 = validatePhoneNumber('+91', '0123456789');
+  const rejStarts1 = validatePhoneNumber('+91', '1234567890');
+  const rej9Digits = validatePhoneNumber('+91', '987654321');
+  const rej11Digits = validatePhoneNumber('+91', '98765432100');
+  const rejLetters = validatePhoneNumber('+91', '98765abcde');
+  const rejSpaces = validatePhoneNumber('+91', '98765 43210');
+  const rejSpecial = validatePhoneNumber('+91', '98765-43210');
+  const rejBrackets = validatePhoneNumber('+91', '(987)6543210');
+  const rejDots = validatePhoneNumber('+91', '98765.43210');
+
+  const allReject =
+    !rejStarts5.isValid &&
+    !rejStarts0.isValid &&
+    !rejStarts1.isValid &&
+    !rej9Digits.isValid &&
+    !rej11Digits.isValid &&
+    !rejLetters.isValid &&
+    !rejSpaces.isValid &&
+    !rejSpecial.isValid &&
+    !rejBrackets.isValid &&
+    !rejDots.isValid;
+
+  // International check: other country codes (e.g. +1 US, +44 UK) retain standard validation without 6-9 rule
+  const intlUS = validatePhoneNumber('+1', '5123456789');
+  const intlUK = validatePhoneNumber('+44', '2079460199');
+  const intlPass = intlUS.isValid && intlUK.isValid;
+
+  assert(
+    allPass && allReject && intlPass,
+    'Phone validation: strictly validates 10 digits, ^[6-9][0-9]{9}$ for +91, rejecting 0-5, letters, spaces, and special chars'
+  );
+
+  // Backend validation check: verify backend /api/auth/send-otp rejects invalid Indian numbers
+  try {
+    const backendRej5 = await fetch(`${API_BASE}/auth/send-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ countryCode: '+91', localNumber: '5123456789' }),
+    });
+    const backendRej0 = await fetch(`${API_BASE}/auth/send-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ countryCode: '+91', localNumber: '0123456789' }),
+    });
+    const backendRejSpaces = await fetch(`${API_BASE}/auth/send-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ countryCode: '+91', localNumber: '98765 43210' }),
+    });
+    const backendRejSpecial = await fetch(`${API_BASE}/auth/send-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ countryCode: '+91', localNumber: '98765-43210' }),
+    });
+
+    assert(
+      backendRej5.status === 400 &&
+      backendRej0.status === 400 &&
+      backendRejSpaces.status === 400 &&
+      backendRejSpecial.status === 400,
+      'Backend OTP: strictly rejects Indian numbers starting with 0-5, spaces, and special characters'
+    );
+  } catch (e) {
+    assert(false, `Backend phone validation error: ${e.message}`);
+  }
 
   // ----------------------------------------------------
   // TEST 29: Phone auth: OTP generation & verification succeeds with session token
