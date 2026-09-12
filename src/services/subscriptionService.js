@@ -12,7 +12,15 @@ import {
   setStoredSubscription,
   getStoredCurrency,
   setStoredCurrency,
+  getAuth,
 } from '../data/storage.js';
+import {
+  normalizePlan,
+  toCanonicalPlan,
+  isProPlan,
+  isPlusPlan,
+  isFreePlan,
+} from '../utils/planUtils.js';
 
 export class SubscriptionService {
   /**
@@ -31,6 +39,12 @@ export class SubscriptionService {
       });
       setStoredSubscription(sub);
       return sub;
+    }
+
+    // Always normalize plan property
+    const normalizedPlan = normalizePlan(sub.plan);
+    if (sub.plan !== normalizedPlan) {
+      sub.plan = normalizedPlan;
     }
 
     // Check expiration if on a paid plan
@@ -60,19 +74,42 @@ export class SubscriptionService {
   saveSubscription(sub) {
     const updated = {
       ...sub,
+      plan: normalizePlan(sub?.plan),
       updatedAt: new Date().toISOString(),
     };
     setStoredSubscription(updated);
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('tf_subscription_changed', { detail: updated }));
+    }
     return updated;
+  }
+
+  /**
+   * Returns plan metadata for any given plan tier or current active plan.
+   * @param {string} [planInput] - 'free' | 'plus' | 'pro'
+   */
+  getPlanDetails(planInput) {
+    const planKey = toCanonicalPlan(planInput || this.getSubscription().plan);
+    return SUBSCRIPTION_PLANS[planKey] || SUBSCRIPTION_PLANS.FREE;
   }
 
   /**
    * Returns current active plan metadata from SUBSCRIPTION_PLANS.
    */
   getCurrentPlanDetails() {
-    const sub = this.getSubscription();
-    const planKey = (sub.plan || 'free').toUpperCase();
-    return SUBSCRIPTION_PLANS[planKey] || SUBSCRIPTION_PLANS.FREE;
+    return this.getPlanDetails();
+  }
+
+  isPro() {
+    return isProPlan(this.getSubscription().plan);
+  }
+
+  isPlus() {
+    return isPlusPlan(this.getSubscription().plan);
+  }
+
+  isFree() {
+    return isFreePlan(this.getSubscription().plan);
   }
 
   /**
@@ -223,19 +260,20 @@ export class SubscriptionService {
    * Changes current plan (Simulated upgrade/downgrade).
    */
   changePlan(planId, currency = null, durationDays = 30) {
-    const targetPlanKey = (planId || 'free').toUpperCase();
+    const cleanPlan = normalizePlan(planId);
+    const targetPlanKey = toCanonicalPlan(cleanPlan);
     const planConfig = SUBSCRIPTION_PLANS[targetPlanKey];
     if (!planConfig) throw new Error('Invalid plan: ' + planId);
 
     const curr = currency || this.getCurrency();
     const price = planConfig.prices[curr] || 0;
     const now = new Date();
-    const endDate = planConfig.id === 'free' ? null : new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000).toISOString();
+    const endDate = cleanPlan === 'free' ? null : new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000).toISOString();
 
     const currentSub = this.getSubscription();
     const updatedSub = {
       ...currentSub,
-      plan: planConfig.id,
+      plan: cleanPlan,
       status: 'active',
       currency: curr,
       price,
@@ -244,8 +282,84 @@ export class SubscriptionService {
       updatedAt: now.toISOString(),
     };
 
-    return this.saveSubscription(updatedSub);
+    const saved = this.saveSubscription(updatedSub);
+    this.syncWithServer(saved).catch((err) => {
+      console.warn('Subscription server sync warning:', err);
+    });
+    return saved;
+  }
+
+  /**
+   * Synchronizes active subscription with the backend server.
+   */
+  async syncWithServer(sub) {
+    if (typeof fetch === 'undefined') return sub;
+    try {
+      const auth = getAuth() || {};
+      const token = auth.token;
+      const userId = auth.userId || auth.phone || 'user-default';
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      if (userId) headers['x-user-id'] = userId;
+
+      const res = await fetch('/api/subscription', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          subscription: sub,
+          userId,
+          plan: sub.plan,
+          currency: sub.currency,
+          status: sub.status,
+          price: sub.price,
+          endDate: sub.endDate,
+          isDemo: sub.isDemo ?? true,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.subscription || sub;
+      }
+    } catch (e) {
+      console.warn('Failed to sync subscription to backend:', e);
+    }
+    return sub;
+  }
+
+  /**
+   * Fetches latest subscription state from backend if available.
+   */
+  async fetchServerSubscription() {
+    if (typeof fetch === 'undefined') return this.getSubscription();
+    try {
+      const auth = getAuth() || {};
+      const token = auth.token;
+      const userId = auth.userId || auth.phone || 'user-default';
+      const headers = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      if (userId) headers['x-user-id'] = userId;
+
+      const res = await fetch(`/api/subscription?userId=${encodeURIComponent(userId)}`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.subscription && data.subscription.plan) {
+          const current = this.getSubscription();
+          if (normalizePlan(data.subscription.plan) !== current.plan) {
+            const updated = {
+              ...current,
+              ...data.subscription,
+              plan: normalizePlan(data.subscription.plan),
+            };
+            return this.saveSubscription(updated);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch subscription from backend:', e);
+    }
+    return this.getSubscription();
   }
 }
 
 export const subscriptionService = new SubscriptionService();
+

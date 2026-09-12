@@ -6,16 +6,17 @@
  */
 
 import { subscriptionService } from './subscriptionService.js';
+import { isProPlan, isPlusPlan } from '../utils/planUtils.js';
 
 export class FeatureAccessService {
   isProEnabled() {
-    const plan = subscriptionService.getCurrentPlanDetails();
-    return plan.id === 'pro';
+    const sub = subscriptionService.getSubscription();
+    return isProPlan(sub?.plan);
   }
 
   isPlusEnabled() {
-    const plan = subscriptionService.getCurrentPlanDetails();
-    return plan.id === 'plus' || plan.id === 'pro';
+    const sub = subscriptionService.getSubscription();
+    return isPlusPlan(sub?.plan);
   }
 
   canUseAutopilot(mode = 'manual') {

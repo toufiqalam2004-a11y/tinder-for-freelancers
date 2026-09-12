@@ -19,10 +19,13 @@ import {
   Building2,
   FilePlus2,
   Briefcase,
+  Mail,
+  Phone,
 } from 'lucide-react';
 import Card from './Card';
 import Button from './Button';
 import Modal from './Modal';
+import { extractContactInfo } from '../utils/contactExtractor.js';
 
 
 export default function JobCard({
@@ -33,6 +36,7 @@ export default function JobCard({
   onUndo,
   showActions = true,
   isSwipeable = false,
+  quickApplyActive = false,
   style = {},
 }) {
   const navigate = useNavigate();
@@ -162,6 +166,8 @@ export default function JobCard({
     portfolioScore: 5,
   };
 
+  const contactInfo = job.contact || extractContactInfo(job);
+
   return (
     <>
       <motion.div
@@ -181,7 +187,7 @@ export default function JobCard({
               style={{ opacity: applyOpacity }}
               className="absolute top-8 left-8 z-30 pointer-events-none border-4 border-emerald-500 text-emerald-500 rounded-xl px-4 py-1.5 font-extrabold text-2xl tracking-wider rotate-[-15deg] bg-surface/90 backdrop-blur-md shadow-elevated"
             >
-              APPLY
+              {quickApplyActive ? 'QUICK APPLY' : 'APPLY'}
             </motion.div>
 
             {/* SKIP stamp (swipe left) */}
@@ -235,6 +241,23 @@ export default function JobCard({
               >
                 {qualityBadge}
               </span>
+
+              {/* Direct Contact Verification Badge */}
+              {contactInfo.hasDirectContact ? (
+                <span className="inline-flex items-center gap-1 bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/20 px-2 py-0.5 rounded-full text-[10px] font-semibold">
+                  <Mail size={11} />
+                  {contactInfo.hasEmail && contactInfo.hasPhone
+                    ? 'Direct: Email + WA'
+                    : contactInfo.hasEmail
+                    ? 'Direct: Email'
+                    : 'Direct: WhatsApp'}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 bg-surface-hover text-text-muted border border-border px-2 py-0.5 rounded-full text-[10px] font-medium">
+                  <ExternalLink size={10} />
+                  Manual Apply
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-1.5">

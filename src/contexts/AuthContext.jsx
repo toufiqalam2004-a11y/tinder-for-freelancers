@@ -1,7 +1,9 @@
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { getAuth, setAuth as persistAuth } from '../data/storage.js';
 import { apiClient } from '../services/apiClient.js';
 import { validatePhoneNumber } from '../utils/validators.js';
+import { subscriptionService } from '../services/subscriptionService.js';
+import { normalizePlan, isProPlan } from '../utils/planUtils.js';
 
 const AuthContext = createContext(null);
 
@@ -26,6 +28,15 @@ export function AuthProvider({ children }) {
   const [authError, setAuthError] = useState('');
   const [isDemo, setIsDemo] = useState(true);
   const [demoCode, setDemoCode] = useState('123456');
+  const [plan, setPlan] = useState(() => subscriptionService.getSubscription().plan);
+
+  useEffect(() => {
+    const handleSubChanged = (e) => {
+      setPlan(normalizePlan(e.detail?.plan));
+    };
+    window.addEventListener('tf_subscription_changed', handleSubChanged);
+    return () => window.removeEventListener('tf_subscription_changed', handleSubChanged);
+  }, []);
 
   const sendOtp = useCallback(async (phoneNumber, details = {}) => {
     setAuthLoading(true);
@@ -95,7 +106,13 @@ export function AuthProvider({ children }) {
           countryCode,
           localNumber,
           token: result.token,
+          userId: result.user?.id || phone,
         });
+
+        // Sync subscription from server
+        subscriptionService.fetchServerSubscription().then((s) => {
+          if (s?.plan) setPlan(normalizePlan(s.plan));
+        }).catch(() => {});
       } else {
         setAuthError(result.error || 'Invalid OTP. Please try again.');
       }
@@ -113,7 +130,7 @@ export function AuthProvider({ children }) {
     setIsAuthenticated(false);
     setPhone('');
     setVerificationId(null);
-    persistAuth({ isAuthenticated: false, phone: '' });
+    persistAuth({ isAuthenticated: false, phone: '', userId: '' });
   }, []);
 
   return (
@@ -132,6 +149,8 @@ export function AuthProvider({ children }) {
         isDemo,
         demoCode,
         DEMO_OTP: isDemo ? (demoCode || '123456') : null,
+        plan,
+        isPro: isProPlan(plan),
       }}
     >
       {children}

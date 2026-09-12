@@ -1,5 +1,6 @@
 import { createJob } from '../data/models.js';
 import { calculateProMatch, evaluateJobQuality, detectRiskSignals } from './proMatchEngine.js';
+import { extractContactInfo } from '../utils/contactExtractor.js';
 
 
 /**
@@ -333,6 +334,11 @@ export function processPostToJob(post, userProfile, source) {
   const proMatch = calculateProMatch(candidateJob, userProfile || {});
   const quality = evaluateJobQuality(candidateJob);
   const riskSignals = detectRiskSignals(candidateJob);
+  const contact = extractContactInfo({
+    ...post,
+    title: extracted.title,
+    description: post.postText,
+  });
 
   return createJob({
     sourceId: source?.id || post.sourceId,
@@ -372,11 +378,17 @@ export function processPostToJob(post, userProfile, source) {
     isDemo: post.isDemo !== undefined ? post.isDemo : false,
     isJob: true,
     status: 'discovered',
+    contact,
+    contactEmail: contact.email,
+    contactPhone: contact.phone,
+    hasDirectContact: contact.hasDirectContact,
   });
 }
 
 /**
  * Realistic Demo Sample Posts for Seed Testing
+ * Includes both direct contact opportunities (Email, WhatsApp, or Both)
+ * and contact-less opportunities (manual application via platform / DM).
  */
 export const DEMO_SAMPLE_POSTS = [
   {
@@ -384,21 +396,21 @@ export const DEMO_SAMPLE_POSTS = [
     author: 'u/ApexMediaHQ',
     platform: 'reddit',
     postUrl: 'https://reddit.com/r/forhire/comments/hiring_lead_youtube_editor',
-    text: '🔥 [Hiring] Lead YouTube Video Editor for fast-growing Finance & Tech channel (280k subscribers). Seeking someone proficient in Premiere Pro, dynamic pacing, and retention storytelling. 1-2 videos/week. 100% Remote. Budget: $450 - $650 per video. Drop your portfolio link or DM me.',
+    text: '🔥 [Hiring] Lead YouTube Video Editor for fast-growing Finance & Tech channel (280k subscribers). Seeking someone proficient in Premiere Pro, dynamic pacing, and retention storytelling. 1-2 videos/week. 100% Remote. Budget: $450 - $650 per video. Send your portfolio directly to jobs@apexmedia.co with subject "YouTube Editor Application".',
   },
   {
     id: 'sample-yt-1',
     author: 'Studio Velocity (YouTube Channel)',
     platform: 'youtube',
     postUrl: 'https://www.youtube.com/watch?v=sample_hiring_yt',
-    text: 'WE ARE HIRING A FULL-TIME SHORT-FORM VIDEO EDITOR! ($3,500/mo). Looking for an editor to repurpose podcast highlights into viral TikToks and YouTube Shorts with dynamic captions and sound design. Remote.',
+    text: 'WE ARE HIRING A FULL-TIME SHORT-FORM VIDEO EDITOR! ($3,500/mo). Looking for a skilled Video Editor proficient in Premiere Pro to repurpose podcast highlights into viral TikToks and YouTube Shorts with dynamic captions and sound design. Remote. WhatsApp your recent edits to +91 98765 43210 to schedule a chat.',
   },
   {
     id: 'sample-x-1',
     author: '@AlexFounder (Building in public)',
     platform: 'x',
     postUrl: 'https://x.com/alexfounder/status/sample_hiring_tweet',
-    text: 'Hiring: Need a freelance Motion Graphics Designer & Video Editor for upcoming SaaS launch promos. After Effects mastery required. $40/hr or $2,500 project rate. Remote worldwide. DM your portfolio!',
+    text: 'Hiring: Need a freelance Motion Graphics Designer & Video Editor for upcoming SaaS launch promos. After Effects mastery required. $40/hr or $2,500 project rate. Remote worldwide. Reach out at alex@motionforge.io or WhatsApp +1-555-019-2834 with your portfolio!',
   },
   {
     id: 'sample-fb-1',
@@ -406,5 +418,33 @@ export const DEMO_SAMPLE_POSTS = [
     platform: 'facebook_group',
     postUrl: 'https://www.facebook.com/groups/videoeditors/posts/77218392',
     text: 'Urgent: Looking for a skilled Video Editor to edit weekly YouTube documentary episodes. 100% Remote. Paid: $500 per video. Comment below with portfolio link!',
+  },
+  {
+    id: 'sample-reddit-2',
+    author: 'u/FintechMediaGroup',
+    platform: 'reddit',
+    postUrl: 'https://reddit.com/r/forhire/comments/hiring_shortform_specialist',
+    text: '🚀 [Hiring] Short-Form Video Editor & Retention Specialist. Looking for someone skilled in Premiere Pro, subtitles, sound design, and fast cuts. Budget: $3,000/mo. Please email hiring@fintechcreators.com with sample links.',
+  },
+  {
+    id: 'sample-yt-2',
+    author: 'HyperScale Media',
+    platform: 'youtube',
+    postUrl: 'https://www.youtube.com/watch?v=sample_hyperscale_hiring',
+    text: 'We are hiring a Creative Video Editor skilled in After Effects for weekly creator vlogs & podcasts ($400/video). Remote. Text or WhatsApp +44 7911 123456 with your rates and showreel.',
+  },
+  {
+    id: 'sample-fb-2',
+    author: 'Marcus Vance (Production Lead)',
+    platform: 'facebook_group',
+    postUrl: 'https://www.facebook.com/groups/videoeditors/posts/99341201',
+    text: 'We are hiring an experienced Video Editor for a 6-month commercial retainer ($4,000/mo). Premiere Pro + After Effects. Email resume & reel to editor@documedia.org.',
+  },
+  {
+    id: 'sample-x-2',
+    author: '@ViralGrowthAgency',
+    platform: 'x',
+    postUrl: 'https://x.com/viralgrowthagency/status/open_role_editor',
+    text: 'We are hiring a freelance Video Editor for 3 creator clients! $50/short. 100% remote. DM me on Twitter/X with your best reel to apply.',
   },
 ];

@@ -1,23 +1,27 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   User, LogOut, FileText, ExternalLink, Briefcase, ShieldCheck, 
   DollarSign, MapPin, Sparkles, Award, TrendingUp, Layers, CheckCircle2,
-  Palette, Sun, Moon, Laptop, Crown, ChevronRight
+  Palette, Sun, Moon, Laptop, Crown, ChevronRight, Lock, Zap, Mail, MessageCircle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PageTransition from '../components/PageTransition';
 import Card from '../components/Card';
 import Button from '../components/Button';
+import UpgradeModal from '../components/UpgradeModal';
 import { useProfile } from '../contexts/ProfileContext';
 import { useSources } from '../contexts/SourcesContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import ColorThemeCustomizer from '../components/ColorThemeCustomizer';
 import { calculateProfileStrength } from '../services/proMatchEngine';
-import { getFunnelAnalytics, getAutopilotStats, getWorkspaces } from '../data/storage.js';
+import { getFunnelAnalytics, getAutopilotStats, getWorkspaces, getOutreachPreferences, updateOutreachPreferences } from '../data/storage.js';
 import { subscriptionService } from '../services/subscriptionService';
 import { usageService } from '../services/usageService';
+import { featureAccess } from '../services/featureAccessService.js';
+import { outreachService } from '../services/outreach/outreachService.js';
+import { normalizePlan, isProPlan } from '../utils/planUtils.js';
 
 const THEME_OPTIONS = [
   {
@@ -51,10 +55,58 @@ const THEME_LABELS = {
 
 const Profile = () => {
   const navigate = useNavigate();
-  const { profile } = useProfile();
+  const { profile, saveProfile } = useProfile();
   const { sources } = useSources();
   const { logout } = useAuth();
   const { themeMode, setThemeMode } = useTheme();
+
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [currentPlan, setCurrentPlan] = useState(() => subscriptionService.getSubscription()?.plan || 'free');
+  const [isPro, setIsPro] = useState(() => featureAccess.isProEnabled());
+
+  const [outreachStatus, setOutreachStatus] = useState({
+    emailConfigured: false,
+    whatsAppConfigured: false,
+    hasAnyProvider: false,
+  });
+
+  useEffect(() => {
+    let isMounted = true;
+    outreachService.getOutreachStatus().then((status) => {
+      if (isMounted && status) {
+        setOutreachStatus(status);
+      }
+    }).catch(() => {});
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleSubChanged = (e) => {
+      const newPlan = e.detail?.plan;
+      setCurrentPlan(normalizePlan(newPlan));
+      setIsPro(isProPlan(newPlan));
+    };
+    window.addEventListener('tf_subscription_changed', handleSubChanged);
+    return () => window.removeEventListener('tf_subscription_changed', handleSubChanged);
+  }, []);
+
+  const currentOutreachPrefs = profile?.outreachPreferences || getOutreachPreferences();
+  const [outreachPrefs, setOutreachPrefs] = useState(currentOutreachPrefs);
+
+  const handleUpdateOutreach = (updates) => {
+    if (!isPro) {
+      setShowUpgradeModal(true);
+      return;
+    }
+    const next = updateOutreachPreferences(updates);
+    setOutreachPrefs(next);
+    if (saveProfile) {
+      saveProfile({ outreachPreferences: next });
+    }
+    toast.success('Outreach preferences updated!');
+  };
 
   const [activeProfileTab, setActiveProfileTab] = useState('primary');
   const analytics = getFunnelAnalytics();
@@ -140,11 +192,11 @@ const Profile = () => {
         {/* Membership & Quotas Card */}
         {(() => {
           const sub = subscriptionService.getSubscription();
-          const plan = subscriptionService.getCurrentPlanDetails();
+          const plan = subscriptionService.getPlanDetails(currentPlan) || subscriptionService.getCurrentPlanDetails();
           const usage = usageService.getTodayUsage();
           const credits = usageService.getCreditsSummary();
-          const dailyLimit = plan.limits.applicationsPerDay;
-          const usedToday = usage.applicationsUsed || 0;
+          const dailyLimit = plan?.limits?.applicationsPerDay ?? 5;
+          const usedToday = usage?.applicationsUsed || 0;
 
           return (
             <Card className="p-4 bg-surface border border-border shadow-sm space-y-3">
@@ -155,15 +207,15 @@ const Profile = () => {
                   </div>
                   <div>
                     <span className="text-xs font-bold text-text-primary flex items-center gap-1.5">
-                      <span>{plan.name} Membership</span>
-                      {plan.badge && (
+                      <span>{plan?.name || 'Free'} Membership</span>
+                      {plan?.badge && (
                         <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-primary text-white">
                           {plan.badge}
                         </span>
                       )}
                     </span>
                     <span className="text-[11px] text-text-secondary">
-                      {sub.plan === 'free' ? 'Starter Plan' : 'Active Subscription'}
+                      {normalizePlan(sub?.plan || currentPlan) === 'free' ? 'Starter Plan' : 'Active Subscription'}
                     </span>
                   </div>
                 </div>
@@ -265,6 +317,162 @@ const Profile = () => {
           </div>
         </Card>
 
+        {/* Pro-only Quick Apply / Auto Outreach Section */}
+        <Card className="mt-4 p-4 bg-surface border border-border">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+                <Zap size={16} />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-text-primary flex items-center gap-1.5">
+                  <span>Quick Apply</span>
+                  <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500 text-white shadow-sm">
+                    PRO
+                  </span>
+                </h3>
+                <p className="text-[11px] text-text-muted">
+                  Swipe once and let AI handle the application and outreach.
+                </p>
+              </div>
+            </div>
+
+            {isPro ? (
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!!outreachPrefs.quickApplyEnabled}
+                  onChange={(e) => handleUpdateOutreach({ quickApplyEnabled: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-surface-hover peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-border after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+              </label>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowUpgradeModal(true)}
+                className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-surface-hover border border-border text-text-muted hover:text-primary flex items-center gap-1"
+              >
+                <Lock size={12} />
+                <span>Locked</span>
+              </button>
+            )}
+          </div>
+
+          {!isPro ? (
+            /* Locked upgrade prompt for Free & Plus */
+            <div className="mt-3 p-3.5 rounded-xl bg-surface-hover/70 border border-border/80 text-center space-y-2">
+              <div className="flex items-center justify-center gap-1 text-xs font-bold text-text-primary">
+                <Lock size={14} className="text-amber-500" />
+                <span>PRO Feature</span>
+              </div>
+              <p className="text-xs text-text-secondary leading-relaxed">
+                Free and Plus users review applications before sending. Upgrade to <strong>PRO</strong> to enable 1-swipe AI Auto Outreach directly to clients via Email and WhatsApp.
+              </p>
+              <Button
+                variant="primary"
+                size="sm"
+                className="mt-1"
+                onClick={() => setShowUpgradeModal(true)}
+                icon={<Crown size={14} />}
+              >
+                Upgrade to PRO
+              </Button>
+            </div>
+          ) : (
+            /* Pro Configuration Controls */
+            <div className="mt-3 space-y-3 pt-2 border-t border-border">
+              {/* Channel selector */}
+              <div>
+                <span className="text-[11px] font-semibold text-text-secondary block mb-1.5">
+                  Outreach Channel Preference:
+                </span>
+                <div className="grid grid-cols-3 gap-1.5 text-xs">
+                  {[
+                    { id: 'both', label: 'Email & WhatsApp' },
+                    { id: 'email', label: 'Email Only' },
+                    { id: 'whatsapp', label: 'WhatsApp Only' },
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => handleUpdateOutreach({ contactPreference: opt.id })}
+                      className={`py-1.5 px-2 rounded-lg border text-center font-medium transition-all ${
+                        outreachPrefs.contactPreference === opt.id
+                          ? 'bg-primary text-white border-primary shadow-sm'
+                          : 'bg-surface-hover border-border text-text-secondary hover:text-text-primary'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Provider Config Status Callout */}
+              <div className="p-2.5 rounded-xl bg-surface-hover border border-border text-[11px] space-y-1.5">
+                <div className="flex items-center justify-between font-semibold text-text-secondary">
+                  <span>Outreach Adapters Live Status:</span>
+                  <span className="text-[10px] text-text-muted">
+                    {outreachStatus.emailConfigured || outreachStatus.whatsAppConfigured
+                      ? 'Live Providers'
+                      : outreachStatus.demoOutreachEnabled
+                      ? 'Demo Simulation'
+                      : 'Not Configured'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="flex items-center gap-1.5 text-text-secondary">
+                    <Mail size={12} className="text-primary" /> Email Adapter
+                  </span>
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      outreachStatus.emailConfigured
+                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                        : outreachStatus.demoOutreachEnabled
+                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                        : 'bg-surface text-text-muted border border-border'
+                    }`}
+                  >
+                    {outreachStatus.emailConfigured
+                      ? 'Email Ready'
+                      : outreachStatus.demoOutreachEnabled
+                      ? 'Demo Outreach Active'
+                      : 'Not Configured'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="flex items-center gap-1.5 text-text-secondary">
+                    <MessageCircle size={12} className="text-emerald-500" /> WhatsApp Adapter
+                  </span>
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      outreachStatus.whatsAppConfigured
+                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                        : outreachStatus.demoOutreachEnabled
+                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                        : 'bg-surface text-text-muted border border-border'
+                    }`}
+                  >
+                    {outreachStatus.whatsAppConfigured
+                      ? 'WhatsApp Ready'
+                      : outreachStatus.demoOutreachEnabled
+                      ? 'Demo Outreach Active'
+                      : 'Not Configured'}
+                  </span>
+                </div>
+                <p className="text-[10px] text-text-muted leading-normal pt-1 border-t border-border/60">
+                  {outreachStatus.demoOutreachEnabled ? (
+                    <span>🧪 <strong>Demo Outreach Active:</strong> 1-swipe Quick Apply simulates outreach internally and marks applications as DEMO without sending real external emails or WhatsApp messages.</span>
+                  ) : (
+                    <span>⚠️ Note: Real automated outreach requires active API credentials. If unconfigured or client has no direct contact, swiping right seamlessly falls back to the manual proposal review page so no job is lost or falsely marked sent.</span>
+                  )}
+                </p>
+              </div>
+            </div>
+          )}
+        </Card>
+
         {/* Skills Profiler with Levels */}
         {skills.length > 0 && (
           <Card className="mt-4 p-4">
@@ -298,23 +506,27 @@ const Profile = () => {
               <ExternalLink size={14} className="text-primary" /> Portfolios & Proof ({portfolios.length})
             </h3>
             <div className="space-y-2">
-              {portfolios.map((port, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center justify-between p-2.5 rounded-lg bg-surface-hover border border-border text-xs"
-                >
-                  <span className="font-semibold text-text-primary">{port.title || 'Portfolio Link'}</span>
-                  <a
-                    href={port.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary font-medium hover:underline inline-flex items-center gap-1"
+              {portfolios.map((port, idx) => {
+                const title = typeof port === 'string' ? 'Portfolio Link' : (port?.title || 'Portfolio Link');
+                const url = typeof port === 'string' ? port : (port?.url || '#');
+                return (
+                  <div
+                    key={idx}
+                    className="flex items-center justify-between p-2.5 rounded-lg bg-surface-hover border border-border text-xs"
                   >
-                    <span>Visit</span>
-                    <ExternalLink size={11} />
-                  </a>
-                </div>
-              ))}
+                    <span className="font-semibold text-text-primary">{title}</span>
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary font-medium hover:underline inline-flex items-center gap-1"
+                    >
+                      <span>Visit</span>
+                      <ExternalLink size={11} />
+                    </a>
+                  </div>
+                );
+              })}
             </div>
           </Card>
         )}
@@ -329,7 +541,7 @@ const Profile = () => {
           </div>
           <div className="px-4 py-3 flex justify-between items-center text-xs">
             <span className="text-text-muted font-medium">Active Sources Connected</span>
-            <span className="font-semibold text-text-primary">{sources.length} sources</span>
+            <span className="font-semibold text-text-primary">{(sources || []).length} sources</span>
           </div>
         </Card>
 
@@ -423,6 +635,15 @@ const Profile = () => {
             Sign Out
           </Button>
         </div>
+
+        {/* Upgrade Modal */}
+        <UpgradeModal
+          isOpen={showUpgradeModal}
+          onClose={() => setShowUpgradeModal(false)}
+          title="PRO Quick Apply Feature"
+          message="Quick Apply & Auto Outreach is an exclusive PRO membership feature. Upgrade to PRO to enable automated 1-swipe job applications!"
+          highlightPlan="pro"
+        />
       </div>
     </PageTransition>
   );

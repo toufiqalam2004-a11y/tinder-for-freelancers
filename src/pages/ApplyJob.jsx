@@ -31,7 +31,7 @@ import Modal from '../components/Modal';
 import UpgradeModal from '../components/UpgradeModal';
 import { useProfile } from '../contexts/ProfileContext';
 import { createApplication } from '../data/models.js';
-import { addApplication, updateJobStatus, getJobById, getApplicationByJobId } from '../data/storage.js';
+import { addApplication, updateJobStatus, getJobById, getApplicationByJobId, setUserJobApplied, getCurrentUserId } from '../data/storage.js';
 import { aiService } from '../services/aiService';
 import { usageService } from '../services/usageService';
 import { subscriptionService } from '../services/subscriptionService';
@@ -244,8 +244,10 @@ const ApplyJob = () => {
         return;
       }
 
+      const currentUid = profile?.id || getCurrentUserId();
       const app = createApplication({
         jobId: job.id,
+        userId: currentUid,
         title: job.title,
         company: job.company || job.author,
         platform: job.platform,
@@ -272,6 +274,7 @@ const ApplyJob = () => {
       }
 
       addApplication(app);
+      setUserJobApplied(job.id, currentUid);
       updateJobStatus(job.id, 'applied');
       toast.success('Application recorded! Added to Applications.');
       navigate('/applications');

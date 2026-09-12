@@ -1,3 +1,5 @@
+import { extractContactInfo } from '../utils/contactExtractor.js';
+
 let counter = Date.now();
 
 function generateId() {
@@ -264,6 +266,13 @@ export function createPost(fields = {}) {
 }
 
 export function createJob(fields = {}) {
+  const contact = fields.contact || extractContactInfo(fields);
+  const email = contact.email || fields.contactEmail || fields.email || null;
+  const phone = contact.phone || fields.contactPhone || fields.phone || null;
+  const hasDirectContact = typeof fields.hasDirectContact === 'boolean' 
+    ? fields.hasDirectContact 
+    : (contact.hasDirectContact !== undefined ? contact.hasDirectContact : (Boolean(email) || Boolean(phone)));
+
   return {
     id: fields.id || generateId(),
     sourceId: fields.sourceId || null,
@@ -309,6 +318,10 @@ export function createJob(fields = {}) {
     metadata: fields.metadata || {},
     experience: fields.experience || '',
     contactMethod: fields.contactMethod || '',
+    contact,
+    contactEmail: email,
+    contactPhone: phone,
+    hasDirectContact,
   };
 }
 

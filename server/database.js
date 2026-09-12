@@ -40,15 +40,18 @@ class JsonDatabase {
   }
 
   findAll(predicate = null) {
+    this.load();
     if (!predicate) return [...this.data];
     return this.data.filter(predicate);
   }
 
   findById(id) {
+    this.load();
     return this.data.find((item) => item.id === id || item._id === id);
   }
 
   findOne(predicate) {
+    this.load();
     return this.data.find(predicate);
   }
 

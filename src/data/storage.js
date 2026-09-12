@@ -43,6 +43,35 @@ export function saveUser(user) {
   setItem(STORAGE_KEYS.USER, user);
 }
 
+export function getOutreachPreferences() {
+  const user = getUser();
+  return (
+    user?.outreachPreferences || {
+      quickApplyEnabled: false,
+      contactPreference: 'both', // 'both' | 'email' | 'whatsapp'
+      autoIncludePortfolio: true,
+      autoIncludeCv: true,
+    }
+  );
+}
+
+export function updateOutreachPreferences(preferences) {
+  const user = getUser() || {};
+  const current = user.outreachPreferences || {
+    quickApplyEnabled: false,
+    contactPreference: 'both',
+    autoIncludePortfolio: true,
+    autoIncludeCv: true,
+  };
+  const updated = {
+    ...current,
+    ...preferences,
+  };
+  user.outreachPreferences = updated;
+  saveUser(user);
+  return updated;
+}
+
 // Sources
 export function getSources() {
   return getItem(STORAGE_KEYS.SOURCES) || [];
@@ -201,25 +230,87 @@ export function saveApplications(apps) {
   setItem(STORAGE_KEYS.APPLICATIONS, apps);
 }
 
-export function addApplication(app) {
+export function getCurrentUserId() {
+  const auth = getAuth();
+  if (auth && (auth.phone || auth.userId)) {
+    return auth.phone || auth.userId;
+  }
+  const user = getUser();
+  if (user && user.id) {
+    return user.id;
+  }
+  return 'user-default';
+}
+
+export function getUserAppliedJobIds(userId = null) {
+  const uid = userId || getCurrentUserId();
+  const appliedSet = new Set();
+
   const apps = getApplications();
-  const existingIndex = apps.findIndex((a) => a.id === app.id || (a.jobId && a.jobId === app.jobId));
+  apps.forEach((a) => {
+    const appUid = a.userId || 'user-default';
+    if (appUid === uid && a.status && a.status !== 'draft' && a.status !== 'saved') {
+      if (a.jobId) appliedSet.add(String(a.jobId));
+    }
+  });
+
+  const userStoreKey = `tf_user_applied_${uid}`;
+  const storedList = getItem(userStoreKey) || [];
+  storedList.forEach((id) => appliedSet.add(String(id)));
+
+  return Array.from(appliedSet);
+}
+
+export function setUserJobApplied(jobId, userId = null) {
+  if (!jobId) return;
+  const uid = userId || getCurrentUserId();
+  const userStoreKey = `tf_user_applied_${uid}`;
+  const storedList = getItem(userStoreKey) || [];
+  const strId = String(jobId);
+  if (!storedList.includes(strId)) {
+    storedList.push(strId);
+    setItem(userStoreKey, storedList);
+  }
+}
+
+export function isJobAppliedByUser(jobId, userId = null) {
+  if (!jobId) return false;
+  const uid = userId || getCurrentUserId();
+  const appliedIds = getUserAppliedJobIds(uid);
+  return appliedIds.includes(String(jobId));
+}
+
+export function addApplication(app) {
+  const currentUid = app.userId || getCurrentUserId();
+  const appWithUser = {
+    ...app,
+    userId: currentUid,
+  };
+  const apps = getApplications();
+  const existingIndex = apps.findIndex(
+    (a) => a.id === appWithUser.id || (a.jobId && a.jobId === appWithUser.jobId && (!a.userId || a.userId === currentUid))
+  );
   if (existingIndex !== -1) {
     // Preserve history when updating
     const existing = apps[existingIndex];
     const statusHistory = existing.statusHistory || [];
-    if (app.status && app.status !== existing.status) {
+    if (appWithUser.status && appWithUser.status !== existing.status) {
       statusHistory.unshift({
-        status: app.status,
+        status: appWithUser.status,
         timestamp: new Date().toISOString(),
-        note: `Status changed to ${app.status}`,
+        note: `Status changed to ${appWithUser.status}`,
       });
     }
-    apps[existingIndex] = { ...existing, ...app, statusHistory };
+    apps[existingIndex] = { ...existing, ...appWithUser, statusHistory };
   } else {
-    apps.unshift(app);
+    apps.unshift(appWithUser);
   }
   saveApplications(apps);
+
+  if (appWithUser.status && appWithUser.status !== 'draft' && appWithUser.status !== 'saved') {
+    setUserJobApplied(appWithUser.jobId, currentUid);
+  }
+
   return apps;
 }
 
@@ -330,9 +421,10 @@ export function getApplicationById(id) {
   return apps.find((a) => a.id === id) || null;
 }
 
-export function getApplicationByJobId(jobId) {
+export function getApplicationByJobId(jobId, userId = null) {
+  const uid = userId || getCurrentUserId();
   const apps = getApplications();
-  return apps.find((a) => a.jobId === jobId) || null;
+  return apps.find((a) => a.jobId === jobId && (!a.userId || a.userId === uid)) || null;
 }
 
 /**

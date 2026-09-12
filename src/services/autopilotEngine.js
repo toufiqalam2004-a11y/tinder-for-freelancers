@@ -28,6 +28,7 @@ import {
 import { createLead, createAgentTask, createAgentActivity, createNotification } from '../data/models.js';
 import { aiProvider } from './aiProvider';
 import { calculateProMatch } from './proMatchEngine';
+import { extractContactInfo } from '../utils/contactExtractor.js';
 
 export class AutopilotEngine {
   /**
@@ -98,9 +99,10 @@ export class AutopilotEngine {
           text.includes('freelance') ||
           job.jobType === 'freelance';
 
-        // Extract contact handles
-        const emailMatch = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-        const phoneMatch = text.match(/(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+        // Extract verified direct contact info
+        const contactInfo = job.contact || extractContactInfo(job);
+        const email = contactInfo.email || null;
+        const phone = contactInfo.phone || null;
 
         const newLead = createLead({
           sourceId: job.sourceId,
@@ -113,8 +115,8 @@ export class AutopilotEngine {
           title: job.title,
           description: job.description,
           sourceUrl: job.sourceUrl || job.postUrl,
-          email: emailMatch ? emailMatch[0] : null,
-          phone: phoneMatch ? phoneMatch[0].replace(/[^\d+]/g, '') : null,
+          email,
+          phone,
           matchScore: matchResult.matchScore,
           status: 'discovered',
           isDemo: job.isDemo || false,
@@ -125,7 +127,7 @@ export class AutopilotEngine {
         newLead.qualificationScore = qualResult.score;
         newLead.qualificationReasons = qualResult.reasons;
 
-        if (qualResult.score >= 60) {
+        if (qualResult.score >= 60 && contactInfo.hasDirectContact) {
           qualifiedCount++;
           newLead.status = 'qualified';
 

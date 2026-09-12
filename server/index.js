@@ -133,6 +133,20 @@ export function authenticateToken(req, res, next) {
   next();
 }
 
+// Session resolver middleware to populate req.userId and req.user when token is present
+app.use((req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+  if (token && activeSessions.has(token)) {
+    const session = activeSessions.get(token);
+    if (Date.now() <= session.expiresAt) {
+      req.user = { id: session.userId, phone: session.phone };
+      req.userId = session.userId;
+    }
+  }
+  next();
+});
+
 // 5. Health Check Endpoint
 app.get('/api/health', (req, res) => {
   res.json({

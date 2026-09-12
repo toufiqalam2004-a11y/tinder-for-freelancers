@@ -18,6 +18,8 @@ import {
   MessageSquare,
   SlidersHorizontal,
   ArrowUpDown,
+  RefreshCw,
+  Zap,
 } from 'lucide-react';
 import { AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -43,9 +45,22 @@ import {
   logUserEvent,
   getUserEvents,
   addNotification,
+  addApplication,
+  getOutreachPreferences,
+  getPosts,
+  getUserAppliedJobIds,
+  setUserJobApplied,
+  getCurrentUserId,
+  isJobAppliedByUser,
 } from '../data/storage.js';
-import { DEMO_SAMPLE_POSTS, processPostToJob } from '../services/jobClassifier';
-import { createPost, createSavedSearch, createNotification } from '../data/models.js';
+import { DEMO_SAMPLE_POSTS, processPostToJob } from '../services/jobClassifier.js';
+import { createPost, createSavedSearch, createNotification, createApplication } from '../data/models.js';
+import { featureAccess } from '../services/featureAccessService.js';
+import { outreachService } from '../services/outreach/outreachService.js';
+import { deduplicationService } from '../services/deduplicationService.js';
+import { usageService } from '../services/usageService.js';
+import { hasDirectContact, extractContactInfo } from '../utils/contactExtractor.js';
+import { isProPlan } from '../utils/planUtils.js';
 import {
   REMOTE_OPTIONS,
   MATCH_THRESHOLDS,
@@ -93,35 +108,146 @@ const Jobs = () => {
   const demoActive = isDemoMode();
 
 
-  // Auto-seed demo jobs if empty and demo mode is active
+  // Auto-seed demo jobs if needed and demo mode is active
   useEffect(() => {
     const existing = getJobs();
-    if (existing.length === 0 && demoActive) {
+    if (demoActive) {
+      const existingPostIds = new Set(existing.map((j) => String(j.postId || '')).filter(Boolean));
+      const existingUrls = new Set(existing.map((j) => j.sourceUrl || j.postUrl).filter(Boolean));
+      let added = false;
+
       DEMO_SAMPLE_POSTS.forEach((sample) => {
-        const post = createPost({
-          postId: sample.id,
-          postText: sample.text,
-          postUrl: sample.postUrl,
-          author: sample.author,
-          platform: sample.platform,
-          isDemo: true,
-        });
-        const job = processPostToJob(post, profile, { platform: sample.platform, name: 'Sample Source' });
-        if (job) {
-          addJob(job);
+        if (!existingPostIds.has(String(sample.id)) && (!sample.postUrl || !existingUrls.has(sample.postUrl))) {
+          const post = createPost({
+            postId: sample.id,
+            postText: sample.text,
+            postUrl: sample.postUrl,
+            author: sample.author,
+            platform: sample.platform,
+            isDemo: true,
+          });
+          const job = processPostToJob(post, profile, { platform: sample.platform, name: 'Sample Source' });
+          if (job) {
+            addJob(job);
+            existingPostIds.add(String(sample.id));
+            added = true;
+          }
         }
       });
-      setJobs(getJobs());
+
+      if (added || existing.length === 0) {
+        setJobs(getJobs());
+      }
     }
   }, [demoActive, profile]);
+
+  const [isApplying, setIsApplying] = useState(false);
+  const [isRefilling, setIsRefilling] = useState(false);
+  const [isPro, setIsPro] = useState(() => featureAccess.isProEnabled());
+
+  useEffect(() => {
+    const handleSubChanged = (e) => {
+      const newPlan = e.detail?.plan;
+      setIsPro(isProPlan(newPlan));
+    };
+    window.addEventListener('tf_subscription_changed', handleSubChanged);
+    return () => window.removeEventListener('tf_subscription_changed', handleSubChanged);
+  }, []);
+
+  const outreachPrefs = profile?.outreachPreferences || getOutreachPreferences();
+  const quickApplyActive = isPro && Boolean(outreachPrefs?.quickApplyEnabled);
 
   const refreshJobs = useCallback(() => {
     setJobs(getJobs());
   }, []);
 
+  const refillFeed = useCallback(async () => {
+    setIsRefilling(true);
+    try {
+      const currentJobs = getJobs();
+      const existingIds = new Set(currentJobs.map((j) => j.id));
+      const existingPostIds = new Set(currentJobs.map((j) => String(j.postId || '')).filter(Boolean));
+      const existingUrls = new Set(currentJobs.map((j) => j.sourceUrl || j.postUrl).filter(Boolean));
+
+      let addedCount = 0;
+
+      // 1. Check stored posts that are not yet jobs
+      const storedPosts = getPosts();
+      for (const post of storedPosts) {
+        if (existingPostIds.has(String(post.postId || post.id)) || (post.postUrl && existingUrls.has(post.postUrl))) {
+          continue;
+        }
+
+        const candidateJob = processPostToJob(post, profile, {
+          platform: post.platform || 'source',
+          name: post.sourceName || 'Stored Opportunity',
+        });
+
+        if (candidateJob) {
+          const dupCheck = deduplicationService.isDuplicate(candidateJob, currentJobs);
+          if (!dupCheck.isDuplicate && !existingIds.has(candidateJob.id)) {
+            addJob(candidateJob);
+            currentJobs.push(candidateJob);
+            existingIds.add(candidateJob.id);
+            if (candidateJob.postId) existingPostIds.add(String(candidateJob.postId));
+            addedCount++;
+          }
+        }
+      }
+
+      // 2. Check DEMO_SAMPLE_POSTS if demo mode or more opportunities needed
+      if (addedCount === 0 || currentJobs.length < 5) {
+        for (const sample of DEMO_SAMPLE_POSTS) {
+          if (existingPostIds.has(String(sample.id)) || existingUrls.has(sample.postUrl)) {
+            continue;
+          }
+
+          const post = createPost({
+            postId: sample.id,
+            postText: sample.text,
+            postUrl: sample.postUrl,
+            author: sample.author,
+            platform: sample.platform,
+            isDemo: true,
+          });
+
+          const candidateJob = processPostToJob(post, profile, {
+            platform: sample.platform,
+            name: 'Sample Source',
+          });
+
+          if (candidateJob) {
+            const dupCheck = deduplicationService.isDuplicate(candidateJob, currentJobs);
+            if (!dupCheck.isDuplicate && !existingIds.has(candidateJob.id)) {
+              addJob(candidateJob);
+              currentJobs.push(candidateJob);
+              existingIds.add(candidateJob.id);
+              existingPostIds.add(String(sample.id));
+              addedCount++;
+            }
+          }
+        }
+      }
+
+      if (addedCount > 0) {
+        setJobs([...getJobs()]);
+        toast.success(`Refilled feed with ${addedCount} new opportunities!`, { icon: '✨' });
+      } else {
+        toast('All available opportunities are already in your feed.', { icon: 'ℹ️' });
+      }
+    } catch (e) {
+      console.warn('Refill feed error:', e);
+    } finally {
+      setIsRefilling(false);
+    }
+  }, [profile]);
+
   useEffect(() => {
     refreshJobs();
   }, [refreshJobs]);
+
+  const currentUserId = profile?.id || getCurrentUserId();
+  const userAppliedIds = useMemo(() => new Set(getUserAppliedJobIds(currentUserId)), [currentUserId, jobs]);
 
   // Comprehensive Multi-Filter & Sort Pipeline
   const filteredJobs = useMemo(() => {
@@ -131,7 +257,17 @@ const Jobs = () => {
         if (j.status !== 'saved') return false;
       } else {
         if (j.status === 'skipped') return false;
+        // User-scoped applied filter: applied jobs are excluded only for this user
+        if (userAppliedIds.has(String(j.id)) || isJobAppliedByUser(j.id, currentUserId)) return false;
         if (activePlatformFilter !== 'all' && j.platform !== activePlatformFilter) return false;
+      }
+
+      // In Quick Apply mode: STRICTLY require direct contact and minimum match qualification
+      if (quickApplyActive && activePlatformFilter !== 'saved') {
+        const contactValid = hasDirectContact(j);
+        if (!contactValid) return false;
+        const minThreshold = Number(profile?.userPreferences?.minMatchScore) || 70;
+        if ((j.matchScore || 0) < minThreshold) return false;
       }
 
       // Remote filter
@@ -202,7 +338,7 @@ const Jobs = () => {
     });
 
     return result;
-  }, [jobs, activePlatformFilter, remoteFilter, jobTypeFilter, matchScoreFilter, categoryFilter, sortBy]);
+  }, [jobs, activePlatformFilter, remoteFilter, jobTypeFilter, matchScoreFilter, categoryFilter, sortBy, quickApplyActive, profile?.userPreferences?.minMatchScore, userAppliedIds, currentUserId]);
 
 
   // Bound index safely
@@ -248,8 +384,9 @@ const Jobs = () => {
     refreshJobs();
   };
 
-  const handleApply = (job) => {
-    if (!job) return;
+  const handleApply = async (job) => {
+    if (!job || isApplying) return;
+
     logUserEvent('job_applied', {
       jobId: job.id,
       jobTitle: job.title,
@@ -259,7 +396,175 @@ const Jobs = () => {
       remote: job.remote,
       requiredSkills: job.requiredSkills,
     });
-    navigate(`/apply/${job.id}`);
+
+    const outreachPrefs = profile?.outreachPreferences || getOutreachPreferences();
+    const quickApplyActive = isPro && outreachPrefs?.quickApplyEnabled;
+
+    if (!quickApplyActive) {
+      // Normal flow: navigate to manual application screen
+      navigate(`/apply/${job.id}`);
+      return;
+    }
+
+    // Pro Quick Apply / Auto Outreach Flow
+    setIsApplying(true);
+    const loadingToast = toast.loading('Personalizing & dispatching AI application...');
+
+    try {
+      // Check quota
+      const quotaCheck = usageService.canApply();
+      if (!quotaCheck.allowed) {
+        toast.dismiss(loadingToast);
+        setUpgradeReason(quotaCheck.reason || 'Daily application limit reached.');
+        setShowUpgradeModal(true);
+        toast.error('Daily application limit reached.');
+        setIsApplying(false);
+        return;
+      }
+
+      const result = await outreachService.executeAutoOutreach({
+        job,
+        profile,
+        preferences: outreachPrefs,
+      });
+
+      toast.dismiss(loadingToast);
+
+      if (result.code === 'PRO_REQUIRED' || result.status === 'NOT_AUTHORIZED') {
+        setIsPro(false);
+        setUpgradeReason(result.error || 'Quick Apply and Auto Outreach are available exclusively for PRO members.');
+        setShowUpgradeModal(true);
+        toast.error('Quick Apply requires PRO membership.');
+        return;
+      }
+
+      if (result.code === 'NOT_QUALIFIED' || result.status === 'NOT_QUALIFIED') {
+        // Not qualified: Do NOT send outreach, mark skipped, remove immediately from active feed
+        updateJobStatus(job.id, 'skipped');
+        setHistory((prev) => [...prev, { job, previousStatus: job.status, action: 'skipped' }]);
+        toast.error("This opportunity doesn't match your profile.", { icon: '🎯' });
+        refreshJobs();
+        return;
+      }
+
+      if (result.code === 'DUPLICATE' || result.status === 'DUPLICATE') {
+        toast("You already applied to this opportunity.", { icon: 'ℹ️' });
+        refreshJobs();
+        return;
+      }
+
+      if (result.code === 'RATE_LIMIT' || result.status === 'RATE_LIMIT') {
+        setUpgradeReason(result.error || 'Daily application limit reached.');
+        setShowUpgradeModal(true);
+        toast.error('Daily application limit reached.');
+        return;
+      }
+
+      if (result.code === 'NO_CONTACT' || result.status === 'NO_CONTACT' || result.code === 'NO_DIRECT_CONTACT' || result.status === 'NO_DIRECT_CONTACT') {
+        toast.error('No client contact information available.', { icon: 'ℹ️', duration: 4000 });
+        return;
+      }
+
+      if (
+        (result.code === 'NOT_CONFIGURED' || result.status === 'NOT_CONFIGURED' || !result.configured) &&
+        result.status !== 'DEMO_SENT' &&
+        result.code !== 'DEMO_SENT' &&
+        !result.demo
+      ) {
+        // Provider unconfigured: NEVER claim sent, notify user accurately
+        toast(result.error || 'Application prepared, but email/WhatsApp delivery is not configured yet.', {
+          icon: '⚠️',
+          duration: 4000,
+        });
+        return;
+      }
+
+      if (
+        result.success &&
+        (result.status === 'DEMO_SENT' || result.code === 'DEMO_SENT' || result.status === 'SENT' || result.code === 'SENT')
+      ) {
+        const isDemo = result.status === 'DEMO_SENT' || result.code === 'DEMO_SENT' || !!result.demo;
+
+        // Successful real dispatch
+        try {
+          usageService.consumeApplication();
+        } catch (e) {
+          console.warn('Quota consumption note:', e);
+        }
+
+        const app = createApplication({
+          jobId: job.id,
+          userId: currentUserId,
+          title: job.title,
+          company: job.company || job.author,
+          platform: job.platform,
+          sourceUrl: job.sourceUrl || job.postUrl,
+          message: result.message || '',
+          originalGeneratedMessage: result.message || '',
+          tone: 'Professional',
+          length: 'Medium',
+          cvAttached: outreachPrefs.autoIncludeCv ?? true,
+          portfolioIncluded: outreachPrefs.autoIncludePortfolio ?? true,
+          applicationMethod: isDemo ? `Demo Quick Apply (${result.channel || 'Direct'})` : `Auto Quick Apply (${result.channel || 'Direct'})`,
+          recipient: result.recipient || '',
+          status: 'applied',
+          outreachStatus: isDemo ? 'DEMO_SENT' : 'SENT',
+          demo: isDemo,
+          matchScore: result.matchScore || job.matchScore,
+          matchReasons: job.matchReasons,
+        });
+
+        addApplication(app);
+        setUserJobApplied(job.id, currentUserId);
+        setHistory((prev) => [...prev, { job, previousStatus: job.status, action: 'applied' }]);
+
+        if (isDemo) {
+          toast.custom(
+            (t) => (
+              <div
+                className={`${
+                  t.visible ? 'animate-enter' : 'animate-leave'
+                } max-w-sm w-full bg-surface shadow-lg rounded-2xl pointer-events-auto flex flex-col p-3.5 border border-primary/40 text-left`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-base">🧪</span>
+                  <span className="text-xs font-bold text-text-primary">
+                    Demo application sent successfully.
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] text-text-secondary leading-snug">
+                  Demo Mode — no real email or WhatsApp message was sent.
+                </p>
+              </div>
+            ),
+            { duration: 4500 }
+          );
+        } else {
+          toast.success('Application sent successfully.', {
+            icon: '🚀',
+            duration: 3500,
+          });
+        }
+
+        // Immediately refresh state to remove applied job from active swipe feed
+        refreshJobs();
+
+        // If active feed is running low, automatically attempt to refill
+        const remaining = getJobs().filter(
+          (j) => j.status !== 'skipped' && !userAppliedIds.has(String(j.id)) && j.status !== 'saved'
+        );
+        if (remaining.length <= 2) {
+          refillFeed();
+        }
+      } else {
+        toast.error(result.error || 'Application could not be sent. Please try again.');
+      }
+    } catch (err) {
+      toast.dismiss(loadingToast);
+      toast.error(err.message || 'Application could not be sent. Please try again.');
+    } finally {
+      setIsApplying(false);
+    }
   };
 
 
@@ -600,7 +905,16 @@ const Jobs = () => {
                   : 'Try relaxing your filter criteria or connect more sources to discover opportunities.'}
               </p>
               <div className="flex flex-col gap-2 w-full max-w-xs">
-                <Button variant="primary" size="sm" onClick={() => navigate('/import-jobs')}>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={refillFeed}
+                  disabled={isRefilling}
+                  icon={<RefreshCw size={14} className={isRefilling ? 'animate-spin' : ''} />}
+                >
+                  {isRefilling ? 'Refilling Opportunities...' : 'Refill Feed from Sources'}
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => navigate('/import-jobs')}>
                   + Connect More Sources
                 </Button>
                 {(activePlatformFilter !== 'all' || activeFiltersCount > 0) && (
@@ -631,10 +945,34 @@ const Jobs = () => {
                   <Sparkles size={13} className="text-primary" />
                   Swipe Cards (Tap to View Details)
                 </span>
-                <span className="font-mono text-[11px] font-semibold text-text-primary">
-                  Card {Math.min(safeIndex + 1, filteredJobs.length)} of {filteredJobs.length}
-                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={refillFeed}
+                    disabled={isRefilling}
+                    title="Refill feed with new opportunities"
+                    className="flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline disabled:opacity-50"
+                  >
+                    <RefreshCw size={11} className={isRefilling ? 'animate-spin' : ''} />
+                    <span>Refill</span>
+                  </button>
+                  <span className="font-mono text-[11px] font-semibold text-text-primary">
+                    Card {Math.min(safeIndex + 1, filteredJobs.length)} of {filteredJobs.length}
+                  </span>
+                </div>
               </div>
+
+              {/* Quick Apply Indicator banner if active */}
+              {isPro && (profile?.outreachPreferences?.quickApplyEnabled || getOutreachPreferences().quickApplyEnabled) && (
+                <div className="mb-2 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between text-[11px] text-emerald-600 dark:text-emerald-400">
+                  <span className="flex items-center gap-1 font-bold">
+                    <Zap size={12} /> PRO Quick Apply Active
+                  </span>
+                  <span className="text-[10px] text-text-muted">
+                    Right swipe dispatches AI outreach
+                  </span>
+                </div>
+              )}
 
               {/* Card Stack Container */}
               <div className="relative w-full h-[450px] flex items-center justify-center">
@@ -657,6 +995,7 @@ const Jobs = () => {
                         job={currentCard}
                         isSwipeable={true}
                         showActions={false}
+                        quickApplyActive={isPro && !!(profile?.outreachPreferences?.quickApplyEnabled || getOutreachPreferences()?.quickApplyEnabled)}
                         onSkip={() => handleSkip(currentCard)}
                         onSave={() => handleSave(currentCard)}
                         onApply={() => handleApply(currentCard)}

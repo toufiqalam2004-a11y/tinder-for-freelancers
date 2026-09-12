@@ -13,6 +13,7 @@ import DemoPaymentModal from '../components/DemoPaymentModal';
 import { subscriptionService } from '../services/subscriptionService';
 import { usageService } from '../services/usageService';
 import { SUBSCRIPTION_PLANS, CREDIT_PACKAGES } from '../utils/constants';
+import { normalizePlan } from '../utils/planUtils';
 import toast from 'react-hot-toast';
 
 export default function Membership() {
@@ -42,6 +43,14 @@ export default function Membership() {
     refreshAll();
   }, [refreshAll]);
 
+  useEffect(() => {
+    const handleSubChanged = () => {
+      refreshAll();
+    };
+    window.addEventListener('tf_subscription_changed', handleSubChanged);
+    return () => window.removeEventListener('tf_subscription_changed', handleSubChanged);
+  }, [refreshAll]);
+
   // Switch Currency
   const handleCurrencyChange = (newCurr) => {
     subscriptionService.setCurrency(newCurr);
@@ -53,7 +62,7 @@ export default function Membership() {
   // Open Checkout for a Plan
   const handleSelectPlan = (planKey) => {
     const plan = SUBSCRIPTION_PLANS[planKey];
-    if (plan.id === sub.plan) {
+    if (normalizePlan(plan.id) === normalizePlan(sub.plan)) {
       toast('You are currently on this plan.', { icon: 'ℹ️' });
       return;
     }
@@ -176,7 +185,7 @@ export default function Membership() {
             </div>
 
             <div className="text-right">
-              {sub.plan === 'free' ? (
+              {normalizePlan(sub.plan) === 'free' ? (
                 <span className="text-xs font-semibold text-text-muted">Standard Tier</span>
               ) : (
                 <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
@@ -259,7 +268,7 @@ export default function Membership() {
           </h3>
 
           {Object.values(SUBSCRIPTION_PLANS).map((plan) => {
-            const isCurrent = sub.plan === plan.id;
+            const isCurrent = normalizePlan(sub.plan) === normalizePlan(plan.id);
             const price = plan.prices[currency];
             const priceStr = subscriptionService.formatPrice(price, currency);
 
