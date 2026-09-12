@@ -9,7 +9,7 @@ const OTP_LENGTH = 6;
 
 const OTPVerification = () => {
   const navigate = useNavigate();
-  const { phone, countryCode, localNumber, verifyOtp, sendOtp, authLoading, authError, DEMO_OTP } = useAuth();
+  const { phone, countryCode, localNumber, verifyOtp, sendOtp, authLoading, authError, DEMO_OTP, isDemo } = useAuth();
 
   const [otp, setOtp] = useState(Array(OTP_LENGTH).fill(''));
   const [resendTimer, setResendTimer] = useState(60);
@@ -241,18 +241,20 @@ const OTPVerification = () => {
           )}
         </motion.div>
 
-        {/* Demo hint */}
-        <motion.div
-          variants={itemVariants}
-          className="mt-8 bg-surface border border-border rounded-card px-4 py-3 w-full"
-        >
-          <p className="text-xs text-text-muted text-center">
-            Demo Mode — Enter OTP{' '}
-            <span className="text-primary-light font-mono font-semibold tracking-widest">
-              {DEMO_OTP}
-            </span>
-          </p>
-        </motion.div>
+        {/* Demo hint - only when demo mode is actually active */}
+        {isDemo && DEMO_OTP && (
+          <motion.div
+            variants={itemVariants}
+            className="mt-8 bg-surface border border-border rounded-card px-4 py-3 w-full"
+          >
+            <p className="text-xs text-text-muted text-center">
+              Demo Mode — Enter OTP{' '}
+              <span className="text-primary-light font-mono font-semibold tracking-widest">
+                {DEMO_OTP}
+              </span>
+            </p>
+          </motion.div>
+        )}
       </div>
     </motion.div>
   );

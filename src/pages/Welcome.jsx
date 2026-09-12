@@ -41,7 +41,7 @@ const FLOW_STEPS = [
 
 const Welcome = () => {
   const navigate = useNavigate();
-  const { sendOtp, authLoading, authError } = useAuth();
+  const { sendOtp, authLoading, authError, isDemo, DEMO_OTP } = useAuth();
 
   const [countryCode, setCountryCode] = useState('+91');
   const [selectedCountryIso, setSelectedCountryIso] = useState('IN');
@@ -372,12 +372,14 @@ const Welcome = () => {
         </motion.div>
       </div>
 
-      {/* Footer / Demo Notice */}
-      <motion.div variants={itemVariants} className="text-center pt-4">
-        <p className="text-[11px] text-text-muted">
-          Demo Testing Mode — Any valid phone number • OTP: <span className="text-primary font-mono font-bold">123456</span>
-        </p>
-      </motion.div>
+      {/* Footer / Demo Notice - ONLY when demo mode is actually active */}
+      {isDemo && (
+        <motion.div variants={itemVariants} className="text-center pt-4">
+          <p className="text-[11px] text-text-muted">
+            Demo Testing Mode — Any valid phone number • OTP: <span className="text-primary font-mono font-bold">{DEMO_OTP || '123456'}</span>
+          </p>
+        </motion.div>
+      )}
 
       {/* How It Works Modal */}
       <AnimatePresence>

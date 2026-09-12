@@ -24,6 +24,8 @@ export function AuthProvider({ children }) {
   const [verificationId, setVerificationId] = useState(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [isDemo, setIsDemo] = useState(true);
+  const [demoCode, setDemoCode] = useState('123456');
 
   const sendOtp = useCallback(async (phoneNumber, details = {}) => {
     setAuthLoading(true);
@@ -54,6 +56,8 @@ export function AuthProvider({ children }) {
         setPhone(finalPhone);
         setCountryCode(finalCc);
         setLocalNumber(finalLocal);
+        setIsDemo(result.isDemo !== false);
+        setDemoCode(result.demoCode || (result.isDemo !== false ? '123456' : ''));
         setVerificationId(result.verificationId || 'otp-session');
         persistAuth({
           isAuthenticated: false,
@@ -125,7 +129,9 @@ export function AuthProvider({ children }) {
         sendOtp,
         verifyOtp,
         logout,
-        DEMO_OTP,
+        isDemo,
+        demoCode,
+        DEMO_OTP: isDemo ? (demoCode || '123456') : null,
       }}
     >
       {children}

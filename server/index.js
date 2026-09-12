@@ -284,8 +284,8 @@ app.post('/api/auth/send-otp', authLimiter, (req, res) => {
   rateLimit.history.push(now);
   rateLimit.cooldownUntil = now + 60 * 1000; // 60-second cooldown
 
-  // Environment-controlled demo switch: disabled in production unless ENABLE_DEMO_OTP === 'true'
-  const allowDemoOtp = process.env.ENABLE_DEMO_OTP === 'true' || (!IS_PROD && process.env.ENABLE_DEMO_OTP !== 'false');
+  // Demo mode is active unless explicitly disabled by ENABLE_DEMO_OTP === 'false'
+  const allowDemoOtp = process.env.ENABLE_DEMO_OTP !== 'false';
   const code = allowDemoOtp ? '123456' : Math.floor(100000 + Math.random() * 900000).toString();
 
   // If a new OTP is requested, invalidate any previous OTP and overwrite with fresh parameters
@@ -306,6 +306,7 @@ app.post('/api/auth/send-otp', authLimiter, (req, res) => {
     countryCode: validation.countryCode,
     localNumber: validation.localNumber,
     isDemo: allowDemoOtp,
+    demoCode: allowDemoOtp ? '123456' : null,
     cooldownSeconds: 60,
   });
 });
