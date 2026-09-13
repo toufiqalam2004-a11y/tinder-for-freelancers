@@ -14,6 +14,7 @@ import {
   getStoredSubscription,
   setStoredSubscription,
 } from '../data/storage.js';
+import { rewardService } from './rewardService.js';
 
 export class UsageService {
   /**
@@ -86,39 +87,77 @@ export class UsageService {
   }
 
   /**
-   * Checks if user can submit another job application today.
-   * Priority:
-   * 1. Daily plan quota (Free=5, Plus=20, Pro=100)
-   * 2. Purchased top-up credits stack
+   * Computes available application balances across subscription quota, reward credits, and purchased credits.
    */
-  canApply() {
+  getApplicationBalances() {
     const plan = subscriptionService.getCurrentPlanDetails();
     const dailyLimit = plan.limits.applicationsPerDay;
     const usage = this.getTodayUsage();
     const usedToday = usage.applicationsUsed || 0;
+    const remainingQuota = Math.max(0, dailyLimit - usedToday);
+    const rewardCredits = rewardService.getRewardCredits();
+    const { activeCredits: purchasedCredits } = this.getCreditsSummary();
 
-    // Under daily quota
-    if (usedToday < dailyLimit) {
+    return {
+      dailyLimit,
+      usedToday,
+      remainingSubscriptionQuota: remainingQuota,
+      rewardCredits,
+      purchasedCredits,
+      availableApplications: remainingQuota + rewardCredits + purchasedCredits,
+    };
+  }
+
+  /**
+   * Checks if user can submit another job application today.
+   * Priority:
+   * 1. Daily plan quota (Free=5, Plus=20, Pro=100)
+   * 2. Reward credits (from daily login & referral bonus)
+   * 3. Purchased top-up credits stack
+   */
+  canApply() {
+    const plan = subscriptionService.getCurrentPlanDetails();
+    const balances = this.getApplicationBalances();
+
+    // 1. Under daily subscription quota
+    if (balances.remainingSubscriptionQuota > 0) {
       return {
         allowed: true,
         source: 'daily_quota',
-        usedToday,
-        dailyLimit,
-        remainingToday: dailyLimit - usedToday,
-        creditsAvailable: this.getCreditsSummary().activeCredits,
+        usedToday: balances.usedToday,
+        dailyLimit: balances.dailyLimit,
+        remainingToday: balances.remainingSubscriptionQuota,
+        rewardCredits: balances.rewardCredits,
+        creditsAvailable: balances.purchasedCredits,
+        availableApplications: balances.availableApplications,
       };
     }
 
-    // Daily quota exhausted -> check purchased credits
-    const { activeCredits } = this.getCreditsSummary();
-    if (activeCredits > 0) {
+    // 2. Reward credits available
+    if (balances.rewardCredits > 0) {
+      return {
+        allowed: true,
+        source: 'reward_credits',
+        usedToday: balances.usedToday,
+        dailyLimit: balances.dailyLimit,
+        remainingToday: 0,
+        rewardCredits: balances.rewardCredits,
+        creditsAvailable: balances.purchasedCredits,
+        availableApplications: balances.availableApplications,
+      };
+    }
+
+    // 3. Purchased credits available
+    if (balances.purchasedCredits > 0) {
       return {
         allowed: true,
         source: 'purchased_credits',
-        usedToday,
-        dailyLimit,
+        usedToday: balances.usedToday,
+        dailyLimit: balances.dailyLimit,
         remainingToday: 0,
-        creditsAvailable: activeCredits,
+        rewardCredits: 0,
+        creditsAvailable: balances.purchasedCredits,
+        availableApplications: balances.availableApplications,
       };
     }
 
@@ -126,17 +165,22 @@ export class UsageService {
     return {
       allowed: false,
       source: 'exhausted',
-      usedToday,
-      dailyLimit,
+      usedToday: balances.usedToday,
+      dailyLimit: balances.dailyLimit,
       remainingToday: 0,
+      rewardCredits: 0,
       creditsAvailable: 0,
-      reason: 'You have reached your daily limit of ' + dailyLimit + ' applications on the ' + plan.name + ' plan. Upgrade to Plus/Pro or buy a top-up credit pack to keep applying.',
+      availableApplications: 0,
+      reason: 'You have reached your daily limit of ' + balances.dailyLimit + ' applications on the ' + plan.name + ' plan. Upgrade to Plus/Pro, earn daily/referral rewards, or buy a top-up credit pack to keep applying.',
     };
   }
 
   /**
    * Consumes 1 application quota.
-   * Decrements daily limit first; if exhausted, consumes from oldest active credit pack.
+   * Consumption order:
+   * 1. Normal subscription quota first
+   * 2. Reward credits second
+   * 3. Purchased top-up credits third
    */
   consumeApplication() {
     const check = this.canApply();
@@ -153,7 +197,21 @@ export class UsageService {
         consumedFrom: 'daily_quota',
         usedToday: usage.applicationsUsed,
         remainingDaily: check.dailyLimit - usage.applicationsUsed,
+        rewardCredits: check.rewardCredits,
         creditsRemaining: check.creditsAvailable,
+        availableApplications: Math.max(0, check.availableApplications - 1),
+      };
+    }
+
+    if (check.source === 'reward_credits') {
+      const remainingRewardCredits = rewardService.consumeRewardCredit();
+      return {
+        consumedFrom: 'reward_credits',
+        usedToday: usage.applicationsUsed,
+        remainingDaily: 0,
+        rewardCredits: remainingRewardCredits,
+        creditsRemaining: check.creditsAvailable,
+        availableApplications: Math.max(0, check.availableApplications - 1),
       };
     }
 
@@ -183,7 +241,9 @@ export class UsageService {
       consumedFrom: 'purchased_credits',
       usedToday: usage.applicationsUsed,
       remainingDaily: 0,
+      rewardCredits: check.rewardCredits,
       creditsRemaining: newSummary.activeCredits,
+      availableApplications: Math.max(0, check.availableApplications - 1),
     };
   }
 

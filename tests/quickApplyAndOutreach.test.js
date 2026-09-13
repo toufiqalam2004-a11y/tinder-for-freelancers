@@ -22,6 +22,46 @@ import {
 import { subscriptionService } from '../src/services/subscriptionService.js';
 import { outreachService } from '../src/services/outreach/outreachService.js';
 import { demoAdapter } from '../src/services/outreach/demoAdapter.js';
+import {
+  hasSeenAutopilotIntro,
+  setSeenAutopilotIntro,
+  getAutopilotSettings,
+  saveAutopilotSettings,
+  getUserPhoto,
+  saveUserPhoto,
+  removeUserPhoto,
+  getSessionPhoto,
+  saveSessionPhoto,
+  clearAllSessionPhotos,
+  setAuth,
+  getUser,
+  saveUser,
+} from '../src/data/storage.js';
+import { autopilotEngine } from '../src/services/autopilotEngine.js';
+import { validateProfileImage } from '../src/utils/imageUtils.js';
+import fs from 'fs';
+
+if (typeof globalThis.localStorage === 'undefined' || typeof globalThis.localStorage.setItem !== 'function') {
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => store.get(k) || null,
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+    clear: () => store.clear(),
+  };
+}
+
+if (typeof globalThis.sessionStorage === 'undefined' || typeof globalThis.sessionStorage.setItem !== 'function') {
+  const sessionStore = new Map();
+  globalThis.sessionStorage = {
+    getItem: (k) => sessionStore.get(k) || null,
+    setItem: (k, v) => sessionStore.set(k, String(v)),
+    removeItem: (k) => sessionStore.delete(k),
+    clear: () => sessionStore.clear(),
+    key: (i) => Array.from(sessionStore.keys())[i] || null,
+    get length() { return sessionStore.size; },
+  };
+}
 
 const API_BASE = 'http://localhost:5000/api';
 
@@ -1387,6 +1427,317 @@ async function runTests() {
     assert(
       validOtpFormat && validPhone.isValid,
       'Demo N: Existing OTP, phone validation and rate limiting tests still pass'
+    );
+  }
+
+  // ----------------------------------------------------
+  // AUTOPILOT ACCESS & REDESIGN TEST SUITE (TESTS 61 - 70)
+  // ----------------------------------------------------
+  // TEST 61: Autopilot Backend: FREE user blocked from /api/autopilot/run-cycle with 403 UPGRADE_REQUIRED
+  try {
+    const res = await fetch(`${API_BASE}/autopilot/run-cycle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': freeUserId },
+      body: JSON.stringify({ userId: freeUserId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    assert(
+      res.status === 403 && data.code === 'UPGRADE_REQUIRED' && data.error.includes('Plus & Pro'),
+      'Autopilot Test 1: FREE user strictly blocked from /api/autopilot/run-cycle with 403 UPGRADE_REQUIRED'
+    );
+  } catch (e) {
+    assert(false, `Autopilot Test 1 failed: ${e.message}`);
+  }
+
+  // TEST 62: Autopilot Backend: PLUS user authorized on /api/autopilot/run-cycle within Plus daily limits (20/day)
+  try {
+    const res = await fetch(`${API_BASE}/autopilot/run-cycle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': plusUserId },
+      body: JSON.stringify({ userId: plusUserId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    assert(
+      res.status === 200 && data.success === true && data.tier === 'plus' && data.dailyLimit === 20 && data.requiresApproval === true,
+      'Autopilot Test 2: PLUS user authorized on /api/autopilot/run-cycle with limited tier & 20 dailyLimit'
+    );
+  } catch (e) {
+    assert(false, `Autopilot Test 2 failed: ${e.message}`);
+  }
+
+  // TEST 63: Autopilot Backend: PRO user authorized on /api/autopilot/run-cycle with full automation (100/day)
+  try {
+    const res = await fetch(`${API_BASE}/autopilot/run-cycle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': proUserId },
+      body: JSON.stringify({ userId: proUserId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    assert(
+      res.status === 200 && data.success === true && data.tier === 'pro' && data.dailyLimit === 100 && data.requiresApproval === false,
+      'Autopilot Test 3: PRO user authorized on /api/autopilot/run-cycle with full tier & 100 dailyLimit'
+    );
+  } catch (e) {
+    assert(false, `Autopilot Test 3 failed: ${e.message}`);
+  }
+
+  // TEST 64: Autopilot Backend: /api/autopilot/status returns correct plan info
+  try {
+    const resFree = await fetch(`${API_BASE}/autopilot/status`, {
+      headers: { 'x-user-id': freeUserId },
+    });
+    const dataFree = await resFree.json();
+
+    const resPlus = await fetch(`${API_BASE}/autopilot/status`, {
+      headers: { 'x-user-id': plusUserId },
+    });
+    const dataPlus = await resPlus.json();
+
+    const resPro = await fetch(`${API_BASE}/autopilot/status`, {
+      headers: { 'x-user-id': proUserId },
+    });
+    const dataPro = await resPro.json();
+
+    assert(
+      dataFree.canUseAutopilot === false &&
+      dataPlus.canUseAutopilot === true && dataPlus.badge.includes('PLUS • LIMITED') &&
+      dataPro.canUseAutopilot === true && dataPro.badge.includes('PRO • FULL ACCESS'),
+      'Autopilot Test 4: /api/autopilot/status returns correct plan hierarchy, badges, and permissions'
+    );
+  } catch (e) {
+    assert(false, `Autopilot Test 4 failed: ${e.message}`);
+  }
+
+  // TEST 65: Autopilot Backend: approve rejects contact-less leads with NO_DIRECT_CONTACT
+  try {
+    const res = await fetch(`${API_BASE}/autopilot/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': proUserId },
+      body: JSON.stringify({
+        userId: proUserId,
+        lead: { id: 'contactless-lead', title: 'Editor', description: 'No contact info here' },
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    assert(
+      res.status === 400 && data.code === 'NO_DIRECT_CONTACT',
+      'Autopilot Test 5: /api/autopilot/approve strictly rejects contact-less opportunities with NO_DIRECT_CONTACT'
+    );
+  } catch (e) {
+    assert(false, `Autopilot Test 5 failed: ${e.message}`);
+  }
+
+  // TEST 66: Autopilot Engine: subscriptionService.canUseAutopilot()
+  {
+    const freeCheck = subscriptionService.canUseAutopilot();
+    assert(
+      freeCheck.allowed === false && freeCheck.requiredPlan === 'plus',
+      'Autopilot Test 6: subscriptionService.canUseAutopilot() locks Free tier with upgrade requirement'
+    );
+  }
+
+  // TEST 67: Autopilot Engine: autopilotEngine.runCycle() blocks Free user
+  {
+    const cycleRes = await autopilotEngine.runCycle({});
+    assert(
+      cycleRes.success === false && cycleRes.code === 'UPGRADE_REQUIRED',
+      'Autopilot Test 7: autopilotEngine.runCycle() strictly halts execution for Free plan users'
+    );
+  }
+
+  // TEST 68: Intro Persistence: hasSeenAutopilotIntro & setSeenAutopilotIntro
+  {
+    const testUserA = `user-intro-a-${Date.now()}`;
+    const testUserB = `user-intro-b-${Date.now()}`;
+
+    const seenAInitial = hasSeenAutopilotIntro(testUserA);
+    setSeenAutopilotIntro(testUserA);
+    const seenAAfter = hasSeenAutopilotIntro(testUserA);
+    const seenBAfter = hasSeenAutopilotIntro(testUserB);
+
+    assert(
+      seenAInitial === false && seenAAfter === true && seenBAfter === false,
+      'Autopilot Test 8: hasSeenAutopilotIntro isolates user states and correctly persists seen status'
+    );
+  }
+
+  // TEST 69: UI Integrity: AutopilotDashboard does NOT contain "Control Mode"
+  {
+    const dashboardCode = fs.readFileSync('src/pages/AutopilotDashboard.jsx', 'utf8');
+    const hasControlModeSection = dashboardCode.includes('Control Mode') || dashboardCode.includes('Control Mode Changed');
+    assert(
+      !hasControlModeSection,
+      'Autopilot Test 9: Control Mode section has been completely and permanently removed from AutopilotDashboard'
+    );
+  }
+
+  // TEST 70: Regression Check: PRO Quick Apply remains strictly PRO-only and untouched
+  try {
+    const res = await fetch(`${API_BASE}/outreach/quick-apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': plusUserId },
+      body: JSON.stringify({ userId: plusUserId, job: { id: 'test-job', title: 'Editor' } }),
+    });
+    const data = await res.json().catch(() => ({}));
+    assert(
+      res.status === 403 && (data.code === 'PRO_REQUIRED' || data.code === 'PRO_ONLY'),
+      'Autopilot Test 10: PRO Quick Apply strictly rejects Plus users with 403 PRO_REQUIRED'
+    );
+  } catch (e) {
+    assert(false, `Autopilot Test 10 failed: ${e.message}`);
+  }
+
+  // ====================================================
+  // SESSION-ONLY PROFILE PHOTO TESTS (TESTS 73 - 84)
+  // ====================================================
+
+  const userA = `user-a-${Date.now()}`;
+  const userB = `user-b-${Date.now()}`;
+  const photoA = 'data:image/jpeg;base64,mockPhotoAContent';
+  const photoB = 'data:image/webp;base64,mockPhotoBContent';
+
+  // TEST 73: New login starts with no profile photo (User A & User B start empty)
+  {
+    setAuth({ isAuthenticated: true, userId: userA, phone: '+919999990001' });
+    const initialPhotoA = getUserPhoto(userA);
+    const initialPhotoB = getUserPhoto(userB);
+    assert(
+      initialPhotoA === null && initialPhotoB === null,
+      'Photo Test 1 & 8: New login starts with no profile photo (empty profile-photo state for User A & User B)'
+    );
+  }
+
+  // TEST 74: User uploads Photo A; Photo A appears during current session
+  {
+    saveUserPhoto(userA, photoA);
+    const currentA = getUserPhoto(userA);
+    assert(
+      currentA === photoA,
+      'Photo Test 2 & 3: User uploads Photo A and it is immediately visible during current session'
+    );
+  }
+
+  // TEST 75: Logout clears Photo A
+  {
+    setAuth({ isAuthenticated: false, userId: '' });
+    clearAllSessionPhotos();
+    const afterLogoutA = getUserPhoto(userA);
+    assert(
+      afterLogoutA === null,
+      'Photo Test 4: Logout strictly clears Photo A from active session'
+    );
+  }
+
+  // TEST 76: Same user logs in again; Photo A does NOT reappear
+  {
+    setAuth({ isAuthenticated: true, userId: userA, phone: '+919999990001' });
+    const secondLoginA = getUserPhoto(userA);
+    assert(
+      secondLoginA === null,
+      'Photo Test 5 & 6: Same user logs in again; previous session Photo A does NOT reappear'
+    );
+  }
+
+  // TEST 77: Uploading Photo B works in the new session
+  {
+    saveUserPhoto(userA, photoB);
+    const newSessionA = getUserPhoto(userA);
+    assert(
+      newSessionA === photoB,
+      'Photo Test 7: Uploading Photo B in new session functions seamlessly'
+    );
+  }
+
+  // TEST 78: User B logs in and never sees User A's photo
+  {
+    setAuth({ isAuthenticated: true, userId: userB, phone: '+919999990002' });
+    const userBPhoto = getUserPhoto(userB);
+    assert(
+      userBPhoto === null && getUserPhoto(userB) !== photoB,
+      'Photo Test 9: User B starts with no photo and never sees User A photo'
+    );
+  }
+
+  // TEST 79: Refresh behavior follows current session behavior (sessionStorage preserved within session)
+  {
+    saveUserPhoto(userB, photoA);
+    const storedInSession = getSessionPhoto(userB);
+    assert(
+      storedInSession === photoA,
+      'Photo Test 10: Refresh behavior preserves uploaded photo during current active session via sessionStorage'
+    );
+    removeUserPhoto(userB);
+  }
+
+  // TEST 80: Valid JPG, PNG, and WEBP formats accepted
+  {
+    const validJpg = { name: 'avatar.jpg', type: 'image/jpeg', size: 1024 * 1024 };
+    const validPng = { name: 'avatar.png', type: 'image/png', size: 2 * 1024 * 1024 };
+    const validWebp = { name: 'avatar.webp', type: 'image/webp', size: 500 * 1024 };
+    assert(
+      validateProfileImage(validJpg).isValid &&
+      validateProfileImage(validPng).isValid &&
+      validateProfileImage(validWebp).isValid,
+      'Photo Test 11 & 12: Image validator accepts JPG, PNG, and WEBP files under 5 MB'
+    );
+  }
+
+  // TEST 81: Image files exceeding 5 MB strictly rejected
+  {
+    const oversizedFile = { name: 'huge.jpg', type: 'image/jpeg', size: 5 * 1024 * 1024 + 1 };
+    const resOversized = validateProfileImage(oversizedFile);
+    assert(
+      !resOversized.isValid && resOversized.error === 'Image must be smaller than 5 MB.',
+      'Photo Test 13: Image validator strictly rejects files exceeding 5 MB'
+    );
+  }
+
+  // TEST 82: Invalid formats rejected
+  {
+    const invalidGif = { name: 'avatar.gif', type: 'image/gif', size: 1024 };
+    const invalidPdf = { name: 'cv.pdf', type: 'application/pdf', size: 1024 };
+    const invalidExe = { name: 'script.exe', type: 'application/x-msdownload', size: 1024 };
+    const resGif = validateProfileImage(invalidGif);
+    const resPdf = validateProfileImage(invalidPdf);
+    const resExe = validateProfileImage(invalidExe);
+    assert(
+      !resGif.isValid && resGif.error === 'Please choose a JPG, PNG, or WEBP image.' &&
+      !resPdf.isValid && !resExe.isValid,
+      'Photo Test 14: Image validator strictly rejects non-supported formats (.gif, .pdf, .exe)'
+    );
+  }
+
+  // TEST 83: ProfileSetup UI contains "Add Profile Photo" and Camera overlay; Profile contains Camera overlay
+  {
+    const fsModule = await import('fs');
+    const pathModule = await import('path');
+    const setupSrc = fsModule.readFileSync(pathModule.resolve('./src/pages/ProfileSetup.jsx'), 'utf-8');
+    const profileSrc = fsModule.readFileSync(pathModule.resolve('./src/pages/Profile.jsx'), 'utf-8');
+    assert(
+      setupSrc.includes('Add Profile Photo') &&
+      setupSrc.includes('Camera') &&
+      setupSrc.includes('ProfilePhotoModal') &&
+      profileSrc.includes('Camera'),
+      'Photo Test 15: ProfileSetup renders Add Profile Photo option with Camera overlay; Profile renders Camera overlay'
+    );
+  }
+
+  // TEST 84: Non-photo profile data remains permanently intact in storage
+  {
+    const profileData = {
+      id: userA,
+      name: 'Test Freelancer',
+      profession: 'Video Editor',
+      skills: [{ name: 'Premiere Pro', level: 'Advanced' }],
+      experience: '5+ years',
+      bio: 'Expert video editor',
+    };
+    saveUser(profileData);
+    const savedUser = getUser();
+    assert(
+      savedUser && savedUser.name === 'Test Freelancer' && savedUser.profession === 'Video Editor' &&
+      !savedUser.avatarUrl && !savedUser.photoUrl,
+      'Photo Test 16: Profile metadata (name, skills, bio, profession) persists intact without permanent photo persistence'
     );
   }
 

@@ -76,6 +76,7 @@ export const apiClient = {
           code,
           countryCode: details.countryCode,
           localNumber: details.localNumber,
+          referralCode: details.referralCode,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -141,6 +142,63 @@ export const apiClient = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+      });
+      return await res.json();
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Fetch user reward status & credits
+   */
+  async getRewardsStatus(date) {
+    try {
+      const q = date ? `?date=${encodeURIComponent(date)}` : '';
+      const res = await fetch(`${API_BASE}/rewards/status${q}`);
+      return await res.json();
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Claim daily login reward (+1 application credit)
+   */
+  async claimDailyLogin(date) {
+    try {
+      const res = await fetch(`${API_BASE}/rewards/daily-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date }),
+      });
+      return await res.json();
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Fetch referral status & unique code
+   */
+  async getReferralsStatus() {
+    try {
+      const res = await fetch(`${API_BASE}/referrals/status`);
+      return await res.json();
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Claim referral code (+5 credits for new user)
+   */
+  async claimReferral(referralCode) {
+    try {
+      const res = await fetch(`${API_BASE}/referrals/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ referralCode }),
       });
       return await res.json();
     } catch (err) {

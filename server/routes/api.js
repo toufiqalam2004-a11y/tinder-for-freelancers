@@ -8,6 +8,7 @@ import { normalizeWhatsAppNumber } from '../../src/utils/validators.js';
 import { extractContactInfo } from '../../src/utils/contactExtractor.js';
 import { normalizePlan, isProPlan, toCanonicalPlan } from '../../src/utils/planUtils.js';
 import { demoAdapter } from '../../src/services/outreach/demoAdapter.js';
+import { generateReferralCode, normalizeReferralCode, isValidReferralCode } from '../../src/utils/referralUtils.js';
 
 export function isDemoOutreachEnabled(req) {
   if (req && req.headers && req.headers['x-enable-demo-outreach'] !== undefined) {
@@ -560,6 +561,230 @@ router.get('/outreach/status', (req, res) => {
   });
 });
 
+// Reward Record & Credit Helpers
+export function getUserRewardRecord(userId) {
+  if (!userId) return null;
+  let record = db.rewards.findOne((r) => r.userId === userId);
+  if (!record) {
+    record = {
+      id: `reward-${userId}`,
+      userId,
+      rewardCredits: 0,
+      totalRewardCredits: 0,
+      lastDailyLoginRewardDate: null,
+      dailyLoginRewardsClaimed: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    db.rewards.insert(record);
+  }
+  return record;
+}
+
+export function getUserRewardCredits(userId) {
+  const record = getUserRewardRecord(userId);
+  return record ? Math.max(0, record.rewardCredits || 0) : 0;
+}
+
+export function getUserPurchasedCredits(userId) {
+  const sub = db.subscriptions.findOne((s) => s.userId === userId);
+  const creditsList = sub?.credits || [];
+  const now = Date.now();
+  let total = 0;
+  for (const pkg of creditsList) {
+    const isExpired = pkg.expiresAt && new Date(pkg.expiresAt).getTime() < now;
+    if (!isExpired) {
+      total += Math.max(0, pkg.remaining || 0);
+    }
+  }
+  return total;
+}
+
+export function getRemainingSubscriptionQuota(userId, plan = 'free') {
+  const today = new Date().toISOString().slice(0, 10);
+  const usage = db.dailyUsage.findOne((u) => u.userId === userId && u.date === today);
+  const used = usage?.applicationsUsed || 0;
+  const canonical = toCanonicalPlan(plan);
+  const limits = { FREE: 5, PLUS: 20, PRO: 100 };
+  const dailyLimit = limits[canonical] || 5;
+  return Math.max(0, dailyLimit - used);
+}
+
+export function getAvailableApplications(userId, plan = 'free') {
+  const remainingQuota = getRemainingSubscriptionQuota(userId, plan);
+  const rewardCredits = getUserRewardCredits(userId);
+  const purchasedCredits = getUserPurchasedCredits(userId);
+  return {
+    remainingSubscriptionQuota: remainingQuota,
+    rewardCredits,
+    purchasedCredits,
+    availableApplications: remainingQuota + rewardCredits + purchasedCredits,
+  };
+}
+
+export function consumeApplicationCredit(userId, plan = 'free') {
+  const today = new Date().toISOString().slice(0, 10);
+  let usage = db.dailyUsage.findOne((u) => u.userId === userId && u.date === today);
+  if (!usage) {
+    usage = {
+      id: `usage-${userId}-${today}`,
+      userId,
+      date: today,
+      applicationsUsed: 0,
+      aiApplyUsed: 0,
+    };
+    db.dailyUsage.insert(usage);
+  }
+
+  const canonical = toCanonicalPlan(plan);
+  const limits = { FREE: 5, PLUS: 20, PRO: 100 };
+  const dailyLimit = limits[canonical] || 5;
+
+  // 1. Consume normal subscription quota first
+  if (usage.applicationsUsed < dailyLimit) {
+    usage.applicationsUsed += 1;
+    usage.updatedAt = new Date().toISOString();
+    db.dailyUsage.insert(usage);
+    return { consumedFrom: 'subscription_quota', remainingQuota: dailyLimit - usage.applicationsUsed };
+  }
+
+  // 2. Consume reward credits second
+  const rewardRecord = getUserRewardRecord(userId);
+  if (rewardRecord && rewardRecord.rewardCredits > 0) {
+    rewardRecord.rewardCredits = Math.max(0, rewardRecord.rewardCredits - 1);
+    rewardRecord.updatedAt = new Date().toISOString();
+    db.rewards.update(rewardRecord.id, rewardRecord);
+    return { consumedFrom: 'reward_credits', remainingRewardCredits: rewardRecord.rewardCredits };
+  }
+
+  // 3. Consume purchased credits third
+  const sub = db.subscriptions.findOne((s) => s.userId === userId);
+  const now = Date.now();
+  for (const pkg of sub?.credits || []) {
+    const isExpired = pkg.expiresAt && new Date(pkg.expiresAt).getTime() < now;
+    if (!isExpired && (pkg.remaining || 0) > 0) {
+      pkg.remaining -= 1;
+      db.subscriptions.update(sub.id, sub);
+      return { consumedFrom: 'purchased_credits', remainingPurchasedCredits: pkg.remaining };
+    }
+  }
+
+  throw new Error('No available application credits remaining.');
+}
+
+export function claimReferralInternal(user, referralCode) {
+  if (!user || !user.id) {
+    return { success: false, error: 'User is required to claim referral.', status: 400 };
+  }
+
+  const cleanCode = normalizeReferralCode(referralCode);
+  if (!cleanCode) {
+    return { success: false, error: 'Referral code is required.', status: 400 };
+  }
+
+  const referrer = db.users.findOne((u) => u.referralCode === cleanCode);
+  if (!referrer) {
+    return { success: false, error: 'Invalid referral code.', status: 404 };
+  }
+
+  // Self-referral prevention
+  if (
+    referrer.id === user.id ||
+    (user.phone && referrer.phone && user.phone === referrer.phone) ||
+    user.referralCode === cleanCode
+  ) {
+    return { success: false, error: 'You cannot refer yourself.', code: 'SELF_REFERRAL', status: 400 };
+  }
+
+  // Permanent attribution check: cannot change referral source once set
+  if (user.referredBy && user.referredBy !== referrer.id) {
+    return {
+      success: false,
+      granted: false,
+      error: 'User already has a permanent referral attribution.',
+      code: 'ALREADY_REFERRED',
+      status: 400,
+    };
+  }
+
+  // Idempotency: if already claimed for this referrer or already completed
+  if (user.referredBy === referrer.id || user.referralStatus === 'completed') {
+    const reward = getUserRewardRecord(user.id);
+    return {
+      success: true,
+      granted: false,
+      alreadyClaimed: true,
+      rewardCredits: reward.rewardCredits,
+      message: 'Referral bonus has already been claimed.',
+      status: 200,
+    };
+  }
+
+  // Existing user prevention:
+  // "Do NOT attach a referral to an existing user who already has an account."
+  // "H. Existing user using referral link => no reward"
+  if (user.isNewUser === false) {
+    return {
+      success: false,
+      granted: false,
+      error: 'Referral bonus is only available for brand new users upon initial signup.',
+      code: 'EXISTING_USER',
+      status: 400,
+    };
+  }
+
+  // Duplicate referral record check
+  const existingReferral = db.referrals.findOne((r) => r.refereeId === user.id);
+  if (existingReferral) {
+    const reward = getUserRewardRecord(user.id);
+    return {
+      success: true,
+      granted: false,
+      alreadyClaimed: true,
+      rewardCredits: reward.rewardCredits,
+      message: 'Referral bonus has already been claimed.',
+      status: 200,
+    };
+  }
+
+  // Grant referral reward: FRIEND gets +5 credits
+  const now = new Date().toISOString();
+  user.referredBy = referrer.id;
+  user.referralCodeUsed = cleanCode;
+  user.referralStatus = 'completed';
+  user.referralCreatedAt = now;
+  user.referralRewardGrantedAt = now;
+  user.isNewUser = false;
+  db.users.update(user.id, user);
+
+  db.referrals.insert({
+    id: `ref-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+    referrerId: referrer.id,
+    referrerCode: referrer.referralCode,
+    refereeId: user.id,
+    refereePhone: user.phone,
+    bonusCredits: 5,
+    status: 'completed',
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const reward = getUserRewardRecord(user.id);
+  reward.rewardCredits = (reward.rewardCredits || 0) + 5;
+  reward.totalRewardCredits = (reward.totalRewardCredits || 0) + 5;
+  reward.updatedAt = now;
+  db.rewards.update(reward.id, reward);
+
+  return {
+    success: true,
+    granted: true,
+    addedCredits: 5,
+    rewardCredits: reward.rewardCredits,
+    message: '🎉 Referral Bonus: You received +5 application credits!',
+    status: 200,
+  };
+}
+
 // 15. POST /api/outreach/quick-apply - Comprehensive PRO One-Swipe Outreach
 router.post('/outreach/quick-apply', async (req, res) => {
   const userId = req.body.userId || req.headers['x-user-id'] || req.userId || 'user-default';
@@ -626,8 +851,8 @@ router.post('/outreach/quick-apply', async (req, res) => {
     db.dailyUsage.insert(usage);
   }
 
-  const dailyLimit = 100;
-  if (usage.applicationsUsed >= dailyLimit) {
+  const appBalances = getAvailableApplications(userId, activePlan);
+  if (appBalances.availableApplications <= 0) {
     return res.status(429).json({
       success: false,
       code: 'RATE_LIMIT',
@@ -777,10 +1002,8 @@ router.post('/outreach/quick-apply', async (req, res) => {
       };
       db.applications.insert(appliedApp);
 
-      // Consume daily quota exactly once
-      usage.applicationsUsed = (usage.applicationsUsed || 0) + 1;
-      usage.updatedAt = new Date().toISOString();
-      db.dailyUsage.insert(usage);
+      // Consume application following priority: 1. Subscription quota -> 2. Reward credits -> 3. Purchased credits
+      consumeApplicationCredit(userId, activePlan);
 
       return res.json({
         success: true,
@@ -859,10 +1082,8 @@ router.post('/outreach/quick-apply', async (req, res) => {
   };
   db.applications.insert(appliedApp);
 
-  // Consume daily quota
-  usage.applicationsUsed = (usage.applicationsUsed || 0) + 1;
-  usage.updatedAt = new Date().toISOString();
-  db.dailyUsage.insert(usage);
+  // Consume application following priority: 1. Subscription quota -> 2. Reward credits -> 3. Purchased credits
+  consumeApplicationCredit(userId, activePlan);
 
   res.json({
     success: true,
@@ -950,6 +1171,264 @@ router.post('/outreach/whatsapp', async (req, res) => {
     configured: true,
     recipient: normalizedPhone,
     messageId: `msg-wa-${Date.now()}`,
+  });
+});
+
+// 18. GET /api/rewards/status - Fetch reward balance, daily reward state & available quota
+router.get('/rewards/status', (req, res) => {
+  const userId = req.userId || req.headers['x-user-id'] || req.query.userId || 'user-default';
+  let user = db.users.findById(userId);
+  if (!user && req.user?.phone) {
+    user = db.users.findOne((u) => u.phone === req.user.phone);
+  }
+  const effectiveUserId = user?.id || userId;
+
+  let sub = db.subscriptions.findOne((s) => s.userId === effectiveUserId || (user?.phone && s.phone === user.phone));
+  const plan = sub?.plan || 'free';
+
+  const reward = getUserRewardRecord(effectiveUserId);
+  const clientDate = req.query.date ? String(req.query.date).slice(0, 10) : new Date().toISOString().slice(0, 10);
+  const claimedToday = reward.lastDailyLoginRewardDate === clientDate;
+
+  const appBalances = getAvailableApplications(effectiveUserId, plan);
+
+  res.json({
+    success: true,
+    rewardCredits: reward.rewardCredits || 0,
+    totalRewardCredits: reward.totalRewardCredits || 0,
+    lastDailyLoginRewardDate: reward.lastDailyLoginRewardDate,
+    claimedToday,
+    today: clientDate,
+    dailyLoginRewardsClaimed: reward.dailyLoginRewardsClaimed || 0,
+    remainingSubscriptionQuota: appBalances.remainingSubscriptionQuota,
+    purchasedCredits: appBalances.purchasedCredits,
+    availableApplications: appBalances.availableApplications,
+  });
+});
+
+// 19. POST /api/rewards/daily-login - Claim exactly +1 application credit once per calendar day
+router.post('/rewards/daily-login', (req, res) => {
+  const userId = req.userId || req.headers['x-user-id'] || req.body.userId || 'user-default';
+  let user = db.users.findById(userId);
+  if (!user && req.user?.phone) {
+    user = db.users.findOne((u) => u.phone === req.user.phone);
+  }
+  const effectiveUserId = user?.id || userId;
+
+  const targetDate = req.body?.date ? String(req.body.date).slice(0, 10) : new Date().toISOString().slice(0, 10);
+  const reward = getUserRewardRecord(effectiveUserId);
+
+  if (reward.lastDailyLoginRewardDate === targetDate) {
+    return res.json({
+      success: true,
+      granted: false,
+      claimedToday: true,
+      rewardCredits: reward.rewardCredits || 0,
+      message: 'Daily login reward already claimed for today.',
+    });
+  }
+
+  // Grant +1 credit
+  reward.rewardCredits = (reward.rewardCredits || 0) + 1;
+  reward.totalRewardCredits = (reward.totalRewardCredits || 0) + 1;
+  reward.lastDailyLoginRewardDate = targetDate;
+  reward.dailyLoginRewardsClaimed = (reward.dailyLoginRewardsClaimed || 0) + 1;
+  reward.updatedAt = new Date().toISOString();
+  db.rewards.update(reward.id, reward);
+
+  res.json({
+    success: true,
+    granted: true,
+    claimedToday: true,
+    addedCredits: 1,
+    rewardCredits: reward.rewardCredits,
+    message: '🎁 Daily Login Reward: +1 application credit added!',
+  });
+});
+
+// 20. GET /api/referrals/status - Fetch unique referral code, link, count & attribution
+router.get('/referrals/status', (req, res) => {
+  const userId = req.userId || req.headers['x-user-id'] || req.query.userId || 'user-default';
+  let user = db.users.findById(userId);
+  if (!user && req.user?.phone) {
+    user = db.users.findOne((u) => u.phone === req.user.phone);
+  }
+  if (!user) {
+    return res.status(404).json({ success: false, error: 'User not found.' });
+  }
+
+  // Ensure user has a referralCode
+  if (!user.referralCode) {
+    let newCode = generateReferralCode();
+    while (db.users.findOne((u) => u.referralCode === newCode)) {
+      newCode = generateReferralCode();
+    }
+    user.referralCode = newCode;
+    db.users.update(user.id, user);
+  }
+
+  const referralCount = db.referrals.count((r) => r.referrerId === user.id && r.status === 'completed');
+  const appBaseUrl = process.env.APP_URL || process.env.FRONTEND_URL || '';
+  const referralLink = appBaseUrl ? `${appBaseUrl.replace(/\/+$/, '')}/?ref=${user.referralCode}` : `/?ref=${user.referralCode}`;
+
+  res.json({
+    success: true,
+    referralCode: user.referralCode,
+    referralLink,
+    referralCount,
+    totalReferralRewards: 0,
+    referredBy: user.referredBy || null,
+    referralStatus: user.referralStatus || null,
+  });
+});
+
+// 21. POST /api/referrals/claim - Claim referral bonus (+5 credits for friend)
+router.post('/referrals/claim', (req, res) => {
+  const userId = req.userId || req.headers['x-user-id'] || req.body.userId;
+  if (!userId) {
+    return res.status(401).json({ success: false, error: 'Authentication required to claim referral.' });
+  }
+
+  let user = db.users.findById(userId);
+  if (!user && req.user?.phone) {
+    user = db.users.findOne((u) => u.phone === req.user.phone);
+  }
+  if (!user) {
+    return res.status(404).json({ success: false, error: 'User not found.' });
+  }
+
+  const result = claimReferralInternal(user, req.body?.referralCode);
+  return res.status(result.status || 200).json(result);
+});
+
+// 22. GET /api/autopilot/status - Autopilot Plan & Authorization Status
+router.get('/autopilot/status', (req, res) => {
+  const userId = req.userId || req.headers['x-user-id'] || req.query.userId;
+  const sub = userId ? db.subscriptions.findOne((s) => s.userId === userId) : null;
+  const activePlan = normalizePlan(sub?.plan || 'free');
+
+  const isPro = isProPlan(activePlan);
+  const isPlus = activePlan === 'plus';
+  const isFree = activePlan === 'free';
+
+  const tier = isPro ? 'pro' : (isPlus ? 'plus' : 'free');
+  const badge = isPro ? 'PRO • FULL ACCESS' : (isPlus ? 'PLUS • LIMITED' : 'AVAILABLE ON PLUS & PRO');
+
+  return res.json({
+    success: true,
+    plan: activePlan,
+    tier,
+    badge,
+    canUseAutopilot: !isFree,
+    limits: {
+      dailyLimit: isPro ? 100 : (isPlus ? 20 : 0),
+      autonomousOutreach: isPro,
+      requiresApproval: isPlus,
+    },
+    message: isPro
+      ? 'Autopilot is running with full Pro automation.'
+      : isPlus
+      ? 'Autopilot is running within your Plus limits.'
+      : 'AI Autopilot is available on Plus & Pro',
+  });
+});
+
+// 23. POST /api/autopilot/run-cycle - Execute Autopilot Discovery & Qualification
+router.post('/autopilot/run-cycle', (req, res) => {
+  const userId = req.userId || req.headers['x-user-id'] || req.body.userId;
+  const sub = userId ? db.subscriptions.findOne((s) => s.userId === userId) : null;
+  const activePlan = normalizePlan(sub?.plan || req.body?.plan || 'free');
+
+  // FREE tier strictly blocked
+  if (activePlan === 'free') {
+    return res.status(403).json({
+      success: false,
+      code: 'UPGRADE_REQUIRED',
+      status: 'LOCKED',
+      error: 'AI Autopilot is available on Plus & Pro',
+      description: 'Let AI discover, qualify and reach out to the best opportunities for you.',
+      primaryCta: 'Upgrade to Plus',
+      secondaryCta: 'View Plans',
+    });
+  }
+
+  // Check quota for Plus and Pro
+  const appBalances = getAvailableApplications(userId, activePlan);
+  if (appBalances.availableApplications <= 0) {
+    return res.status(429).json({
+      success: false,
+      code: 'RATE_LIMIT',
+      error: 'Daily application limit reached. Please try again tomorrow.',
+    });
+  }
+
+  if (activePlan === 'plus') {
+    return res.json({
+      success: true,
+      tier: 'plus',
+      mode: 'limited',
+      dailyLimit: 20,
+      requiresApproval: true,
+      message: 'Autopilot is running within your Plus limits.',
+    });
+  }
+
+  return res.json({
+    success: true,
+    tier: 'pro',
+    mode: 'full',
+    dailyLimit: 100,
+    requiresApproval: false,
+    message: 'Autopilot is running with full Pro automation.',
+  });
+});
+
+// 24. POST /api/autopilot/approve - Approve & Dispatch Autopilot Outreach Lead
+router.post('/autopilot/approve', (req, res) => {
+  const userId = req.userId || req.headers['x-user-id'] || req.body.userId;
+  const sub = userId ? db.subscriptions.findOne((s) => s.userId === userId) : null;
+  const activePlan = normalizePlan(sub?.plan || req.body?.plan || 'free');
+
+  if (activePlan === 'free') {
+    return res.status(403).json({
+      success: false,
+      code: 'UPGRADE_REQUIRED',
+      error: 'AI Autopilot is available on Plus & Pro',
+    });
+  }
+
+  const lead = req.body?.lead;
+  if (!lead) {
+    return res.status(400).json({ success: false, error: 'Lead object is required.' });
+  }
+
+  // Direct contact check
+  const contactInfo = extractContactInfo(lead);
+  if (!contactInfo.hasDirectContact) {
+    return res.status(400).json({
+      success: false,
+      code: 'NO_DIRECT_CONTACT',
+      error: 'No direct client contact (email or WhatsApp) found on opportunity.',
+    });
+  }
+
+  const appBalances = getAvailableApplications(userId, activePlan);
+  if (appBalances.availableApplications <= 0) {
+    return res.status(429).json({
+      success: false,
+      code: 'RATE_LIMIT',
+      error: 'Daily outreach limit reached.',
+    });
+  }
+
+  // Consume credit
+  consumeApplicationCredit(userId, activePlan);
+
+  return res.json({
+    success: true,
+    status: 'sent',
+    outreachStatus: 'DEMO_SENT',
+    message: 'Outreach dispatched successfully.',
   });
 });
 

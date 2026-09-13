@@ -1,4 +1,11 @@
-import { STORAGE_KEYS } from '../utils/constants.js';
+import { STORAGE_KEYS, SESSION_KEYS } from '../utils/constants.js';
+
+// Clean up any legacy persistent photos from localStorage
+try {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    window.localStorage.removeItem('tf_user_photos');
+  }
+} catch {}
 
 function getItem(key) {
   try {
@@ -32,15 +39,125 @@ export function getAuth() {
 
 export function setAuth(auth) {
   setItem(STORAGE_KEYS.AUTH, auth);
+  // Every fresh login or logout resets the session photo state
+  clearAllSessionPhotos();
 }
 
-// User
+// User Profile Data (Persistent except profile photo which is session-only)
 export function getUser() {
-  return getItem(STORAGE_KEYS.USER);
+  const user = getItem(STORAGE_KEYS.USER);
+  if (user) {
+    // Ensure avatarUrl/photoUrl are NEVER permanently restored from localStorage
+    delete user.avatarUrl;
+    delete user.photoUrl;
+  }
+  return user;
 }
 
 export function saveUser(user) {
-  setItem(STORAGE_KEYS.USER, user);
+  if (user) {
+    // Do NOT persist avatarUrl or photoUrl to localStorage
+    const { avatarUrl, photoUrl, ...persistentData } = user;
+    setItem(STORAGE_KEYS.USER, persistentData);
+  }
+}
+
+// ====================================================
+// SESSION-LEVEL PROFILE PHOTO STORE
+// ====================================================
+const inMemorySessionPhotos = new Map();
+
+function getSafeSessionStorage() {
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) return window.sessionStorage;
+    if (typeof globalThis !== 'undefined' && globalThis.sessionStorage) return globalThis.sessionStorage;
+  } catch {}
+  return null;
+}
+
+export function getSessionPhoto(userId) {
+  try {
+    const auth = getAuth();
+    const effectiveId = userId || auth?.userId || auth?.phone || 'current';
+    const storage = getSafeSessionStorage();
+    if (storage) {
+      const val = storage.getItem(`tf_session_photo_${effectiveId}`);
+      if (val) return JSON.parse(val);
+    }
+    return inMemorySessionPhotos.get(effectiveId) || null;
+  } catch {
+    return inMemorySessionPhotos.get(userId || 'current') || null;
+  }
+}
+
+export function saveSessionPhoto(userId, photoDataUrl) {
+  try {
+    const auth = getAuth();
+    const effectiveId = userId || auth?.userId || auth?.phone || 'current';
+    const storage = getSafeSessionStorage();
+
+    if (photoDataUrl) {
+      inMemorySessionPhotos.set(effectiveId, photoDataUrl);
+      if (storage) {
+        storage.setItem(`tf_session_photo_${effectiveId}`, JSON.stringify(photoDataUrl));
+      }
+    } else {
+      inMemorySessionPhotos.delete(effectiveId);
+      if (storage) {
+        storage.removeItem(`tf_session_photo_${effectiveId}`);
+      }
+    }
+
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(
+        new CustomEvent('tf_profile_photo_changed', {
+          detail: { userId: effectiveId, photo: photoDataUrl || null },
+        })
+      );
+    }
+  } catch {}
+}
+
+export function removeSessionPhoto(userId) {
+  saveSessionPhoto(userId, null);
+}
+
+export function clearAllSessionPhotos() {
+  inMemorySessionPhotos.clear();
+  try {
+    const storage = getSafeSessionStorage();
+    if (storage) {
+      const keysToRemove = [];
+      for (let i = 0; i < storage.length; i++) {
+        const k = storage.key(i);
+        if (k && k.startsWith('tf_session_photo')) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => storage.removeItem(k));
+    }
+  } catch {}
+
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(
+      new CustomEvent('tf_profile_photo_changed', {
+        detail: { photo: null },
+      })
+    );
+  }
+}
+
+// Aliases for compatibility
+export function getUserPhoto(userId) {
+  return getSessionPhoto(userId);
+}
+
+export function saveUserPhoto(userId, photoDataUrl) {
+  saveSessionPhoto(userId, photoDataUrl);
+}
+
+export function removeUserPhoto(userId) {
+  removeSessionPhoto(userId);
 }
 
 export function getOutreachPreferences() {
@@ -716,6 +833,27 @@ export function resetAutopilotSetup() {
   };
   saveAutopilotSettings(reset);
   return reset;
+}
+
+export function hasSeenAutopilotIntro(userId = null) {
+  const currentUserId = userId || getUser()?.id || 'default_user';
+  const introSeenMap = getItem('tf_autopilot_intro_seen') || {};
+  if (introSeenMap[currentUserId] !== undefined) {
+    return !!introSeenMap[currentUserId];
+  }
+  // If user has already completed setup or configured autopilot, do not show intro again
+  const settings = getAutopilotSettings();
+  if (settings?.autopilotSetupCompleted || settings?.isConfigured) {
+    return true;
+  }
+  return false;
+}
+
+export function setSeenAutopilotIntro(userId = null) {
+  const currentUserId = userId || getUser()?.id || 'default_user';
+  const introSeenMap = getItem('tf_autopilot_intro_seen') || {};
+  introSeenMap[currentUserId] = true;
+  setItem('tf_autopilot_intro_seen', introSeenMap);
 }
 
 export function getAgentTasks() {

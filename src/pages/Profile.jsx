@@ -1,27 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
-  User, LogOut, FileText, ExternalLink, Briefcase, ShieldCheck, 
-  DollarSign, MapPin, Sparkles, Award, TrendingUp, Layers, CheckCircle2,
-  Palette, Sun, Moon, Laptop, Crown, ChevronRight, Lock, Zap, Mail, MessageCircle
+  LogOut, ShieldCheck, Crown, ChevronRight, Lock, Zap, Mail, MessageCircle, Palette, Sun, Moon, Laptop, Edit3, Camera
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PageTransition from '../components/PageTransition';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import UpgradeModal from '../components/UpgradeModal';
+import ProfilePhotoModal from '../components/ProfilePhotoModal.jsx';
 import { useProfile } from '../contexts/ProfileContext';
-import { useSources } from '../contexts/SourcesContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import ColorThemeCustomizer from '../components/ColorThemeCustomizer';
-import { calculateProfileStrength } from '../services/proMatchEngine';
-import { getFunnelAnalytics, getAutopilotStats, getWorkspaces, getOutreachPreferences, updateOutreachPreferences } from '../data/storage.js';
-import { subscriptionService } from '../services/subscriptionService';
-import { usageService } from '../services/usageService';
+import { calculateProfileStrength } from '../services/proMatchEngine.js';
+import { getWorkspaces, getOutreachPreferences, updateOutreachPreferences, getUserPhoto, saveUserPhoto, removeUserPhoto } from '../data/storage.js';
+import { subscriptionService } from '../services/subscriptionService.js';
+import { usageService } from '../services/usageService.js';
 import { featureAccess } from '../services/featureAccessService.js';
 import { outreachService } from '../services/outreach/outreachService.js';
 import { normalizePlan, isProPlan } from '../utils/planUtils.js';
+import RewardsSection from '../components/RewardsSection';
+import { rewardService } from '../services/rewardService.js';
 
 const THEME_OPTIONS = [
   {
@@ -56,13 +56,17 @@ const THEME_LABELS = {
 const Profile = () => {
   const navigate = useNavigate();
   const { profile, saveProfile } = useProfile();
-  const { sources } = useSources();
-  const { logout } = useAuth();
+  const { logout, profilePhoto, setProfilePhoto } = useAuth();
   const { themeMode, setThemeMode } = useTheme();
 
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [showPhotoModal, setShowPhotoModal] = useState(false);
+  const [imgError, setImgError] = useState(false);
   const [currentPlan, setCurrentPlan] = useState(() => subscriptionService.getSubscription()?.plan || 'free');
   const [isPro, setIsPro] = useState(() => featureAccess.isProEnabled());
+
+  const userId = profile?.id || 'default_user';
+  const currentPhoto = profilePhoto !== undefined ? profilePhoto : getUserPhoto(userId);
 
   const [outreachStatus, setOutreachStatus] = useState({
     emailConfigured: false,
@@ -92,6 +96,15 @@ const Profile = () => {
     return () => window.removeEventListener('tf_subscription_changed', handleSubChanged);
   }, []);
 
+  const [rewardCredits, setRewardCredits] = useState(() => rewardService.getRewardCredits());
+  useEffect(() => {
+    const handleRewardsChanged = () => {
+      setRewardCredits(rewardService.getRewardCredits());
+    };
+    window.addEventListener('tf_rewards_changed', handleRewardsChanged);
+    return () => window.removeEventListener('tf_rewards_changed', handleRewardsChanged);
+  }, []);
+
   const currentOutreachPrefs = profile?.outreachPreferences || getOutreachPreferences();
   const [outreachPrefs, setOutreachPrefs] = useState(currentOutreachPrefs);
 
@@ -108,9 +121,6 @@ const Profile = () => {
     toast.success('Outreach preferences updated!');
   };
 
-  const [activeProfileTab, setActiveProfileTab] = useState('primary');
-  const analytics = getFunnelAnalytics();
-  const autopilotStats = getAutopilotStats();
   const workspaces = getWorkspaces();
   const currentWorkspace = workspaces[0] || { name: 'Personal Workspace' };
 
@@ -125,8 +135,6 @@ const Profile = () => {
   };
 
   const strength = calculateProfileStrength(profile || {});
-  const skills = profile?.skills || [];
-  const portfolios = profile?.portfolioLinks || (profile?.portfolioUrl ? [{ title: 'Main Portfolio', url: profile.portfolioUrl }] : []);
 
   return (
     <PageTransition>
@@ -143,16 +151,45 @@ const Profile = () => {
           </div>
           <button
             onClick={() => navigate('/profile-setup')}
-            className="text-xs px-3 py-1.5 rounded-xl border border-primary/40 bg-primary/10 text-primary font-semibold hover:bg-primary/20 transition-colors"
+            className="text-xs px-3 py-1.5 rounded-xl border border-primary/40 bg-primary/10 text-primary font-semibold hover:bg-primary/20 transition-colors flex items-center gap-1.5 shadow-sm"
           >
-            Edit Profile
+            <Edit3 size={13} />
+            <span>Edit Profile</span>
           </button>
         </div>
 
         {/* Profile Header Card */}
         <Card className="flex flex-col items-center p-5 text-center bg-surface border border-border">
-          <div className="gradient-primary rounded-full w-16 h-16 flex items-center justify-center shadow-md text-white font-extrabold text-2xl">
-            {getInitials(profile?.name)}
+          <div className="relative">
+            <div
+              onClick={() => setShowPhotoModal(true)}
+              className="rounded-full w-16 h-16 flex items-center justify-center shadow-md overflow-hidden cursor-pointer group border-2 border-primary/20"
+              title="Click to change profile photo"
+            >
+              {currentPhoto && !imgError ? (
+                <img
+                  src={currentPhoto}
+                  alt={profile?.name || 'Freelancer'}
+                  className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                  onError={() => setImgError(true)}
+                />
+              ) : (
+                <div className="gradient-primary w-full h-full flex items-center justify-center text-white font-extrabold text-2xl">
+                  {getInitials(profile?.name)}
+                </div>
+              )}
+            </div>
+
+            {/* Small camera overlay button */}
+            <button
+              type="button"
+              onClick={() => setShowPhotoModal(true)}
+              className="absolute -bottom-1 -right-1 p-1.5 rounded-full bg-primary text-white hover:bg-primary-dark shadow-md border-2 border-surface transition-transform hover:scale-110"
+              title="Change profile photo"
+              aria-label="Change profile photo"
+            >
+              <Camera size={12} />
+            </button>
           </div>
           <h2 className="text-lg font-bold mt-2.5 text-text-primary">{profile?.name || 'Freelancer'}</h2>
           
@@ -161,9 +198,9 @@ const Profile = () => {
           </p>
 
           <div className="flex items-center gap-2 mt-2 text-xs text-text-secondary">
-            <span>{profile?.primaryRole || 'Video Editor'}</span>
+            <span>{profile?.primaryRole || profile?.profession || 'Video Editor'}</span>
             <span>•</span>
-            <span>{profile?.yearsOfExperience || 3} Years Experience</span>
+            <span>{profile?.yearsOfExperience !== undefined ? profile.yearsOfExperience : 3} Years Experience</span>
           </div>
 
           {profile?.bio && (
@@ -187,6 +224,18 @@ const Profile = () => {
               />
             </div>
           </div>
+
+          {/* Direct Edit Button inside card */}
+          <Button
+            variant="outline"
+            size="sm"
+            fullWidth
+            className="mt-3.5 text-xs"
+            onClick={() => navigate('/profile-setup')}
+            icon={<Edit3 size={13} />}
+          >
+            Edit Profile
+          </Button>
         </Card>
 
         {/* Membership & Quotas Card */}
@@ -237,9 +286,9 @@ const Profile = () => {
                   </div>
                 </div>
                 <div className="text-right">
-                  <span className="text-text-muted text-[11px]">Extra Credits:</span>
+                  <span className="text-text-muted text-[11px]">Total Extra Credits:</span>
                   <div className="font-bold text-amber-500 mt-0.5">
-                    {credits.activeCredits} available
+                    {credits.activeCredits + rewardCredits} available
                   </div>
                 </div>
               </div>
@@ -247,78 +296,11 @@ const Profile = () => {
           );
         })()}
 
-        {/* Success Statistics Card */}
+        {/* 3. REWARDS & REFERRALS */}
+        <RewardsSection />
+
+        {/* 4. QUICK APPLY */}
         <Card className="p-4 bg-surface border border-border">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-text-secondary mb-3 flex items-center gap-1.5">
-            <TrendingUp size={14} className="text-primary" /> Career Statistics
-          </h3>
-          <div className="grid grid-cols-3 gap-2 text-center">
-            <div className="p-2.5 rounded-xl bg-surface-hover/60 border border-border">
-              <div className="text-base font-black text-text-primary">{analytics.appliedCount}</div>
-              <div className="text-[10px] text-text-muted font-medium mt-0.5">Applications</div>
-            </div>
-            <div className="p-2.5 rounded-xl bg-surface-hover/60 border border-border">
-              <div className="text-base font-black text-emerald-600 dark:text-emerald-400">
-                {analytics.rates?.responseRate || 0}%
-              </div>
-              <div className="text-[10px] text-text-muted font-medium mt-0.5">Response Rate</div>
-            </div>
-            <div className="p-2.5 rounded-xl bg-surface-hover/60 border border-border">
-              <div className="text-base font-black text-primary">{autopilotStats.meetingsCount || 0}</div>
-              <div className="text-[10px] text-text-muted font-medium mt-0.5">Meetings Booked</div>
-            </div>
-          </div>
-        </Card>
-
-        {/* Multi-Profile Selector */}
-        <div className="p-3 bg-surface rounded-2xl border border-border flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Layers size={16} className="text-primary" />
-            <div>
-              <div className="text-xs font-bold text-text-primary">Active Matching Profile</div>
-              <div className="text-[10px] text-text-muted">Controls which jobs match in your feed</div>
-            </div>
-          </div>
-          <span className="text-[11px] font-bold text-primary bg-primary/10 px-2.5 py-1 rounded-full border border-primary/20">
-            {profile?.primaryRole || 'Video Editor'}
-          </span>
-        </div>
-
-        {/* Work & Rate Preferences */}
-        <Card className="mt-4 p-4">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-text-secondary mb-3 flex items-center gap-1.5">
-            <Briefcase size={14} className="text-primary" /> Career & Preferences
-          </h3>
-          <div className="grid grid-cols-2 gap-3 text-xs">
-            <div className="p-2.5 rounded-lg bg-surface-hover border border-border">
-              <span className="text-[10px] text-text-muted uppercase block">Experience</span>
-              <span className="font-bold text-text-primary mt-0.5 block">
-                {profile?.yearsOfExperience || 3} Years ({profile?.experience || 'Mid-Level'})
-              </span>
-            </div>
-            <div className="p-2.5 rounded-lg bg-surface-hover border border-border">
-              <span className="text-[10px] text-text-muted uppercase block">Location Pref</span>
-              <span className="font-bold text-emerald-500 mt-0.5 block capitalize">
-                {profile?.remotePreference || 'Remote Only'}
-              </span>
-            </div>
-            <div className="p-2.5 rounded-lg bg-surface-hover border border-border">
-              <span className="text-[10px] text-text-muted uppercase block">Min Target Rate</span>
-              <span className="font-bold text-text-primary mt-0.5 block">
-                ${profile?.expectedSalaryMin || 500} / project
-              </span>
-            </div>
-            <div className="p-2.5 rounded-lg bg-surface-hover border border-border">
-              <span className="text-[10px] text-text-muted uppercase block">Availability</span>
-              <span className="font-bold text-text-primary mt-0.5 block">
-                {profile?.availability || 'Immediately'}
-              </span>
-            </div>
-          </div>
-        </Card>
-
-        {/* Pro-only Quick Apply / Auto Outreach Section */}
-        <Card className="mt-4 p-4 bg-surface border border-border">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
@@ -473,80 +455,8 @@ const Profile = () => {
           )}
         </Card>
 
-        {/* Skills Profiler with Levels */}
-        {skills.length > 0 && (
-          <Card className="mt-4 p-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-text-secondary mb-3 flex items-center gap-1.5">
-              <Sparkles size={14} className="text-primary" /> Verified Skills ({skills.length})
-            </h3>
-            <div className="flex flex-wrap gap-1.5">
-              {skills.map((skill) => {
-                const name = typeof skill === 'string' ? skill : skill.name;
-                const level = typeof skill === 'string' ? 'Advanced' : skill.level || 'Advanced';
-                return (
-                  <span
-                    key={name}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-hover border border-border text-xs text-text-primary"
-                  >
-                    <span className="font-medium">{name}</span>
-                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-primary/10 text-primary font-bold">
-                      {level}
-                    </span>
-                  </span>
-                );
-              })}
-            </div>
-          </Card>
-        )}
-
-        {/* Portfolio Showcase */}
-        {portfolios.length > 0 && (
-          <Card className="mt-4 p-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-text-secondary mb-3 flex items-center gap-1.5">
-              <ExternalLink size={14} className="text-primary" /> Portfolios & Proof ({portfolios.length})
-            </h3>
-            <div className="space-y-2">
-              {portfolios.map((port, idx) => {
-                const title = typeof port === 'string' ? 'Portfolio Link' : (port?.title || 'Portfolio Link');
-                const url = typeof port === 'string' ? port : (port?.url || '#');
-                return (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between p-2.5 rounded-lg bg-surface-hover border border-border text-xs"
-                  >
-                    <span className="font-semibold text-text-primary">{title}</span>
-                    <a
-                      href={url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-primary font-medium hover:underline inline-flex items-center gap-1"
-                    >
-                      <span>Visit</span>
-                      <ExternalLink size={11} />
-                    </a>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-        )}
-
-        {/* CV & Sources Info */}
-        <Card className="mt-4 p-0 divide-y divide-border">
-          <div className="px-4 py-3 flex justify-between items-center text-xs">
-            <span className="text-text-muted font-medium">CV Document</span>
-            <span className="font-semibold text-emerald-500">
-              {profile?.cvUrl ? '✓ Verified (demo-cv.pdf)' : 'Not uploaded'}
-            </span>
-          </div>
-          <div className="px-4 py-3 flex justify-between items-center text-xs">
-            <span className="text-text-muted font-medium">Active Sources Connected</span>
-            <span className="font-semibold text-text-primary">{(sources || []).length} sources</span>
-          </div>
-        </Card>
-
-        {/* Appearance & Theme Setting */}
-        <Card className="mt-4 p-4 bg-surface border border-border">
+        {/* 5. APPEARANCE */}
+        <Card className="p-4 bg-surface border border-border">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs font-bold uppercase tracking-wider text-text-secondary flex items-center gap-1.5">
               <Palette size={14} className="text-primary" /> Appearance
@@ -628,7 +538,7 @@ const Profile = () => {
           <ColorThemeCustomizer />
         </Card>
 
-        {/* Sign out */}
+        {/* 6. SIGN OUT */}
         <div className="mt-6">
           <Button variant="ghost" fullWidth onClick={handleLogout}>
             <LogOut size={16} className="mr-2" />
@@ -643,6 +553,25 @@ const Profile = () => {
           title="PRO Quick Apply Feature"
           message="Quick Apply & Auto Outreach is an exclusive PRO membership feature. Upgrade to PRO to enable automated 1-swipe job applications!"
           highlightPlan="pro"
+        />
+
+        {/* Profile Photo Modal */}
+        <ProfilePhotoModal
+          isOpen={showPhotoModal}
+          onClose={() => setShowPhotoModal(false)}
+          currentPhoto={currentPhoto}
+          userInitial={getInitials(profile?.name)}
+          userName={profile?.name || 'Freelancer'}
+          onSave={(newPhoto) => {
+            if (setProfilePhoto) setProfilePhoto(newPhoto);
+            saveUserPhoto(userId, newPhoto);
+            setImgError(false);
+          }}
+          onRemove={() => {
+            if (setProfilePhoto) setProfilePhoto(null);
+            removeUserPhoto(userId);
+            setImgError(false);
+          }}
         />
       </div>
     </PageTransition>

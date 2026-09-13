@@ -1,21 +1,31 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, ChevronLeft, Plus, Trash2, CheckCircle2, ShieldCheck, Sparkles, ExternalLink } from 'lucide-react';
+import { Upload, ChevronLeft, Plus, Trash2, CheckCircle2, ShieldCheck, Sparkles, ExternalLink, Camera } from 'lucide-react';
 import PageTransition from '../components/PageTransition';
 import Input from '../components/Input';
 import Button from '../components/Button';
 import Card from '../components/Card';
+import ProfilePhotoModal from '../components/ProfilePhotoModal.jsx';
 import { useProfile } from '../contexts/ProfileContext';
+import { useAuth } from '../contexts/AuthContext';
 import { CATEGORIES, EXPERIENCE_LEVELS, SKILL_LEVELS, JOB_TYPES, REMOTE_OPTIONS } from '../utils/constants';
 import { calculateProfileStrength } from '../services/proMatchEngine';
 import { aiService } from '../services/aiService';
+import { getUserPhoto, saveUserPhoto, removeUserPhoto } from '../data/storage.js';
 import toast from 'react-hot-toast';
 
 const ProfileSetup = () => {
   const navigate = useNavigate();
   const { profile, saveProfile, isProfileComplete } = useProfile();
+  const authContext = useAuth();
+  const profilePhoto = authContext?.profilePhoto;
+  const setProfilePhoto = authContext?.setProfilePhoto;
   
+  const userId = profile?.id || 'default_user';
   const [name, setName] = useState(profile?.name || '');
+  const [avatarUrl, setAvatarUrl] = useState(() => profilePhoto || getUserPhoto(userId) || '');
+  const [showPhotoModal, setShowPhotoModal] = useState(false);
+  const [imgError, setImgError] = useState(false);
   const [profession, setProfession] = useState(profile?.profession || '');
   const [primaryRole, setPrimaryRole] = useState(profile?.primaryRole || profile?.profession || '');
   const [secondaryRoleInput, setSecondaryRoleInput] = useState('');
@@ -247,6 +257,46 @@ const ProfileSetup = () => {
             </h1>
             <p className="text-xs text-text-muted">Powers your intelligent matching algorithm</p>
           </div>
+        </div>
+
+        {/* Profile Photo Section */}
+        <div className="flex flex-col items-center mb-5">
+          <div className="relative">
+            <div
+              onClick={() => setShowPhotoModal(true)}
+              className="w-20 h-20 rounded-full overflow-hidden border-2 border-primary/30 shadow-md flex items-center justify-center cursor-pointer group bg-surface"
+              title="Click to change profile photo"
+            >
+              {avatarUrl && !imgError ? (
+                <img
+                  src={avatarUrl}
+                  alt={name || 'Profile'}
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                  onError={() => setImgError(true)}
+                />
+              ) : (
+                <div className="gradient-primary w-full h-full flex items-center justify-center text-white text-2xl font-extrabold">
+                  {name ? name.charAt(0).toUpperCase() : 'TF'}
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowPhotoModal(true)}
+              className="absolute -bottom-1 -right-1 p-1.5 rounded-full bg-primary text-white hover:bg-primary-dark shadow-md border-2 border-surface transition-transform hover:scale-110"
+              title="Change profile photo"
+              aria-label="Change profile photo"
+            >
+              <Camera size={13} />
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowPhotoModal(true)}
+            className="text-xs text-primary font-semibold mt-2 hover:underline"
+          >
+            {avatarUrl ? 'Change Photo' : 'Add Profile Photo'}
+          </button>
         </div>
 
         {/* Profile Strength Meter */}
@@ -683,6 +733,27 @@ const ProfileSetup = () => {
             {isProfileComplete ? 'Save Pro Profile' : 'Complete Setup'}
           </Button>
         </div>
+
+        {/* Profile Photo Modal */}
+        <ProfilePhotoModal
+          isOpen={showPhotoModal}
+          onClose={() => setShowPhotoModal(false)}
+          currentPhoto={avatarUrl}
+          userInitial={name ? name.charAt(0).toUpperCase() : 'TF'}
+          userName={name || 'Freelancer'}
+          onSave={(newPhoto) => {
+            setAvatarUrl(newPhoto);
+            if (setProfilePhoto) setProfilePhoto(newPhoto);
+            saveUserPhoto(userId, newPhoto);
+            setImgError(false);
+          }}
+          onRemove={() => {
+            setAvatarUrl('');
+            if (setProfilePhoto) setProfilePhoto(null);
+            removeUserPhoto(userId);
+            setImgError(false);
+          }}
+        />
       </div>
     </PageTransition>
   );

@@ -1,9 +1,11 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { getAuth, setAuth as persistAuth } from '../data/storage.js';
+import { getAuth, setAuth as persistAuth, getSessionPhoto, saveSessionPhoto, removeSessionPhoto, clearAllSessionPhotos } from '../data/storage.js';
 import { apiClient } from '../services/apiClient.js';
 import { validatePhoneNumber } from '../utils/validators.js';
 import { subscriptionService } from '../services/subscriptionService.js';
 import { normalizePlan, isProPlan } from '../utils/planUtils.js';
+import toast from 'react-hot-toast';
+import { rewardService } from '../services/rewardService.js';
 
 const AuthContext = createContext(null);
 
@@ -29,6 +31,29 @@ export function AuthProvider({ children }) {
   const [isDemo, setIsDemo] = useState(true);
   const [demoCode, setDemoCode] = useState('123456');
   const [plan, setPlan] = useState(() => subscriptionService.getSubscription().plan);
+
+  // Session-scoped profile photo
+  const [profilePhoto, setProfilePhotoState] = useState(() => getSessionPhoto());
+
+  useEffect(() => {
+    const handlePhotoChanged = (e) => {
+      setProfilePhotoState(e.detail?.photo || null);
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('tf_profile_photo_changed', handlePhotoChanged);
+      return () => window.removeEventListener('tf_profile_photo_changed', handlePhotoChanged);
+    }
+  }, []);
+
+  const setProfilePhoto = useCallback((photo) => {
+    setProfilePhotoState(photo || null);
+    const targetUser = phone || initialAuth.userId || 'current';
+    if (photo) {
+      saveSessionPhoto(targetUser, photo);
+    } else {
+      removeSessionPhoto(targetUser);
+    }
+  }, [phone, initialAuth.userId]);
 
   useEffect(() => {
     const handleSubChanged = (e) => {
@@ -93,13 +118,18 @@ export function AuthProvider({ children }) {
     setAuthLoading(true);
     setAuthError('');
     try {
+      const pendingRef = rewardService.getPendingReferralCode();
       const result = await apiClient.verifyOtp(phone, code, {
         countryCode,
         localNumber,
+        referralCode: pendingRef,
       });
 
       if (result.success) {
         setIsAuthenticated(true);
+        // Every new login session starts with an empty profile-photo state
+        setProfilePhotoState(null);
+        clearAllSessionPhotos();
         persistAuth({
           isAuthenticated: true,
           phone,
@@ -107,11 +137,31 @@ export function AuthProvider({ children }) {
           localNumber,
           token: result.token,
           userId: result.user?.id || phone,
+          referralCode: result.user?.referralCode || null,
         });
 
         // Sync subscription from server
         subscriptionService.fetchServerSubscription().then((s) => {
           if (s?.plan) setPlan(normalizePlan(s.plan));
+        }).catch(() => {});
+
+        // Referral bonus notification if granted
+        if (result.referralReward?.granted) {
+          toast.success('🎉 Referral Bonus\nYou received +5 application credits!', { duration: 5000 });
+          rewardService.clearPendingReferralCode();
+        } else if (pendingRef && result.user?.isNewUser) {
+          rewardService.claimReferral(pendingRef).then((res) => {
+            if (res.granted) {
+              toast.success('🎉 Referral Bonus\nYou received +5 application credits!', { duration: 5000 });
+            }
+          }).catch(() => {});
+        }
+
+        // Daily Login Reward: +1 application credit once per calendar day
+        rewardService.claimDailyLoginReward().then((dailyRes) => {
+          if (dailyRes?.granted) {
+            toast.success('🎁 Daily Login Reward\n+1 application credit added!', { duration: 4000 });
+          }
         }).catch(() => {});
       } else {
         setAuthError(result.error || 'Invalid OTP. Please try again.');
@@ -130,6 +180,8 @@ export function AuthProvider({ children }) {
     setIsAuthenticated(false);
     setPhone('');
     setVerificationId(null);
+    setProfilePhotoState(null);
+    clearAllSessionPhotos();
     persistAuth({ isAuthenticated: false, phone: '', userId: '' });
   }, []);
 
@@ -151,6 +203,8 @@ export function AuthProvider({ children }) {
         DEMO_OTP: isDemo ? (demoCode || '123456') : null,
         plan,
         isPro: isProPlan(plan),
+        profilePhoto,
+        setProfilePhoto,
       }}
     >
       {children}

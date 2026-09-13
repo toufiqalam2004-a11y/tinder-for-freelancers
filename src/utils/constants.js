@@ -282,6 +282,10 @@ export const STORAGE_KEYS = {
   CURRENCY: 'tf_currency',
 };
 
+export const SESSION_KEYS = {
+  SESSION_PHOTO: 'tf_session_photo',
+};
+
 export const SUBSCRIPTION_PLANS = {
   FREE: {
     id: 'free',

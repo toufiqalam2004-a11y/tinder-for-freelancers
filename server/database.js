@@ -106,6 +106,8 @@ export const db = {
   sourceHealth: new JsonDatabase(path.join(DATA_DIR, 'source_health.json')),
   subscriptions: new JsonDatabase(path.join(DATA_DIR, 'subscriptions.json')),
   dailyUsage: new JsonDatabase(path.join(DATA_DIR, 'daily_usage.json')),
+  rewards: new JsonDatabase(path.join(DATA_DIR, 'rewards.json')),
+  referrals: new JsonDatabase(path.join(DATA_DIR, 'referrals.json')),
 
   flushAll() {
     Object.values(this).forEach((val) => {
@@ -135,6 +137,10 @@ export const db = {
       notifications: this.notifications.findAll(),
       tasks: this.tasks.findAll(),
       sourceHealth: this.sourceHealth.findAll(),
+      subscriptions: this.subscriptions.findAll(),
+      dailyUsage: this.dailyUsage.findAll(),
+      rewards: this.rewards.findAll(),
+      referrals: this.referrals.findAll(),
     };
     fs.writeFileSync(backupFile, JSON.stringify(dump, null, 2), 'utf-8');
     return backupFile;

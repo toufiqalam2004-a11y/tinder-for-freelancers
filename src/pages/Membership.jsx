@@ -14,6 +14,8 @@ import { subscriptionService } from '../services/subscriptionService';
 import { usageService } from '../services/usageService';
 import { SUBSCRIPTION_PLANS, CREDIT_PACKAGES } from '../utils/constants';
 import { normalizePlan } from '../utils/planUtils';
+import RewardsSection from '../components/RewardsSection';
+import { rewardService } from '../services/rewardService';
 import toast from 'react-hot-toast';
 
 export default function Membership() {
@@ -24,6 +26,7 @@ export default function Membership() {
   const [currency, setCurrency] = useState(() => subscriptionService.getCurrency());
   const [todayUsage, setTodayUsage] = useState(() => usageService.getTodayUsage());
   const [creditsSummary, setCreditsSummary] = useState(() => usageService.getCreditsSummary());
+  const [rewardCredits, setRewardCredits] = useState(() => rewardService.getRewardCredits());
   const [refreshKey, setRefreshKey] = useState(0);
 
   // Modal State
@@ -36,6 +39,7 @@ export default function Membership() {
     setCurrency(subscriptionService.getCurrency());
     setTodayUsage(usageService.getTodayUsage());
     setCreditsSummary(usageService.getCreditsSummary());
+    setRewardCredits(rewardService.getRewardCredits());
     setRefreshKey((k) => k + 1);
   }, []);
 
@@ -47,8 +51,15 @@ export default function Membership() {
     const handleSubChanged = () => {
       refreshAll();
     };
+    const handleRewardsChanged = () => {
+      refreshAll();
+    };
     window.addEventListener('tf_subscription_changed', handleSubChanged);
-    return () => window.removeEventListener('tf_subscription_changed', handleSubChanged);
+    window.addEventListener('tf_rewards_changed', handleRewardsChanged);
+    return () => {
+      window.removeEventListener('tf_subscription_changed', handleSubChanged);
+      window.removeEventListener('tf_rewards_changed', handleRewardsChanged);
+    };
   }, [refreshAll]);
 
   // Switch Currency
@@ -231,7 +242,7 @@ export default function Membership() {
             </div>
           </div>
 
-          {/* Purchased Credits Banner */}
+          {/* Application Balances: Remaining Quota + Reward Credits + Purchased Credits */}
           <div className="p-3 rounded-xl bg-surface-hover/70 border border-border flex items-center justify-between text-xs">
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-500 flex items-center justify-center font-bold">
@@ -239,10 +250,10 @@ export default function Membership() {
               </div>
               <div>
                 <span className="font-bold text-text-primary block">
-                  {creditsSummary.activeCredits} Extra Credits
+                  {remainingDaily + rewardCredits + creditsSummary.activeCredits} Total Available Applications
                 </span>
                 <span className="text-[10px] text-text-muted">
-                  Consumed after daily quota runs out
+                  {remainingDaily} quota • {rewardCredits} reward credits • {creditsSummary.activeCredits} top-up credits
                 </span>
               </div>
             </div>
@@ -259,6 +270,9 @@ export default function Membership() {
             </button>
           </div>
         </Card>
+
+        {/* Rewards & Referral Section */}
+        <RewardsSection />
 
         {/* Plan Selection Cards */}
         <div className="space-y-3">

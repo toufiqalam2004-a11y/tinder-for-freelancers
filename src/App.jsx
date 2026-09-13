@@ -23,11 +23,24 @@ import AutopilotDashboard from './pages/AutopilotDashboard';
 import Settings from './pages/Settings';
 import Membership from './pages/Membership';
 import OfflineBanner from './components/OfflineBanner';
+import { rewardService } from './services/rewardService';
 
 function App() {
   const { isAuthenticated } = useAuth();
   const { isProfileComplete } = useProfile();
   const location = useLocation();
+
+  React.useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const ref = params.get('ref') || params.get('referral');
+      if (ref) {
+        rewardService.setPendingReferralCode(ref);
+      }
+    } catch (e) {
+      console.warn('Could not parse referral code from URL:', e);
+    }
+  }, []);
 
   const bottomNavPaths = ['/jobs', '/autopilot', '/sources', '/applications', '/profile'];
   const showBottomNav = bottomNavPaths.includes(location.pathname);

@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Briefcase,
   Sparkles,
   Layers,
   ListFilter,
@@ -24,7 +23,6 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import PageTransition from '../components/PageTransition';
-import Card from '../components/Card';
 import Button from '../components/Button';
 import Input from '../components/Input';
 import Modal from '../components/Modal';
@@ -831,40 +829,6 @@ const Jobs = () => {
             </div>
           );
         })()}
-
-        {/* Profile & Source Stats Bar */}
-        <div className="flex gap-2.5 mt-3">
-          <Card
-            onClick={() => navigate('/profile')}
-            className="flex-1 flex items-center p-3 cursor-pointer hover:border-primary/40 transition-colors"
-          >
-            <Briefcase className="text-primary mr-2.5 flex-shrink-0" size={18} />
-            <div className="min-w-0">
-              <p className="text-xs font-semibold text-text-primary truncate">
-                {profile?.profession || 'Video Editor'}
-              </p>
-              <p className="text-[11px] text-text-muted truncate">
-                {profile?.specialization || 'YouTube Video Editor'}
-              </p>
-            </div>
-          </Card>
-
-          <Card
-            onClick={() => navigate('/sources')}
-            className="flex-1 flex items-center justify-between p-3 cursor-pointer hover:border-primary/40 transition-colors"
-          >
-            <div>
-              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold uppercase block">
-                Sources
-              </span>
-              <span className="text-xs font-bold text-text-primary">{sources?.length || 0} Connected</span>
-            </div>
-            <div className="text-right">
-              <span className="text-[10px] text-text-muted uppercase block">Matching</span>
-              <span className="text-xs font-bold text-primary">{filteredJobs.length} Jobs</span>
-            </div>
-          </Card>
-        </div>
 
         {/* Source Filter Chips */}
         <div className="flex gap-1.5 mt-4 overflow-x-auto pb-1 scrollbar-hide">

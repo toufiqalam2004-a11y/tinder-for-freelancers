@@ -26,28 +26,44 @@ import {
   addNotification,
 } from '../data/storage.js';
 import { createLead, createAgentTask, createAgentActivity, createNotification } from '../data/models.js';
-import { aiProvider } from './aiProvider';
-import { calculateProMatch } from './proMatchEngine';
+import { aiProvider } from './aiProvider.js';
+import { calculateProMatch } from './proMatchEngine.js';
 import { extractContactInfo } from '../utils/contactExtractor.js';
+import { subscriptionService } from './subscriptionService.js';
 
 export class AutopilotEngine {
   /**
    * Runs an autonomous discovery, qualification, and outreach preparation cycle.
    */
   async runCycle(userProfile = {}) {
+    // 1. Subscription Plan Gating: Free strictly blocked
+    if (subscriptionService.isFree()) {
+      return {
+        success: false,
+        code: 'UPGRADE_REQUIRED',
+        reason: 'AI Autopilot is available on Plus & Pro',
+        description: 'Let AI discover, qualify and reach out to the best opportunities for you.',
+      };
+    }
+
     const settings = getAutopilotSettings();
 
     if (settings.status === 'paused') {
       return { success: false, reason: 'Autopilot is paused.' };
     }
 
+    // Determine plan daily limit: Plus = 20 max, Pro = 100 max
+    const isPlus = subscriptionService.isPlus();
+    const planMaxLimit = isPlus ? 20 : 100;
+    const effectiveLimit = Math.min(settings.dailyLimit || planMaxLimit, planMaxLimit);
+
     // Check daily outreach limit
     const dailySent = getDailyOutreachCount();
-    if (dailySent >= settings.dailyLimit) {
+    if (dailySent >= effectiveLimit) {
       logAgentActivity(
         createAgentActivity({
           action: 'Daily Limit Reached',
-          detail: `Reached limit (${dailySent}/${settings.dailyLimit} sent today). Outreach paused until tomorrow.`,
+          detail: `Reached limit (${dailySent}/${effectiveLimit} sent today). Outreach paused until tomorrow.`,
           status: 'warning',
         })
       );
@@ -184,11 +200,30 @@ export class AutopilotEngine {
    * Approves a lead's message and executes send based on control mode.
    */
   async approveOutreach(leadId, userProfile = {}) {
+    // 1. Subscription Plan Gating
+    if (subscriptionService.isFree()) {
+      return {
+        success: false,
+        code: 'UPGRADE_REQUIRED',
+        reason: 'AI Autopilot is available on Plus & Pro',
+      };
+    }
+
     const settings = getAutopilotSettings();
     const lead = getLeads().find((l) => l.id === leadId);
     if (!lead) return { success: false, reason: 'Lead not found' };
 
-    // Duplicate protection cooldown check: minimum 3 days
+    // 2. Direct Contact Verification (Safety requirement)
+    const contactInfo = lead.contact || extractContactInfo(lead);
+    if (!contactInfo.hasDirectContact) {
+      return {
+        success: false,
+        code: 'NO_DIRECT_CONTACT',
+        reason: 'No direct client contact (email or WhatsApp) found on this opportunity.',
+      };
+    }
+
+    // 3. Duplicate protection cooldown check: minimum 3 days
     if (lead.lastContactedAt) {
       const daysSince = (Date.now() - new Date(lead.lastContactedAt).getTime()) / (1000 * 3600 * 24);
       if (daysSince < 3) {
@@ -199,10 +234,14 @@ export class AutopilotEngine {
       }
     }
 
-    // Enforce daily limit
+    // 4. Enforce plan daily limit: Plus = 20 max, Pro = 100 max
+    const isPlus = subscriptionService.isPlus();
+    const planMaxLimit = isPlus ? 20 : 100;
+    const effectiveLimit = Math.min(settings.dailyLimit || planMaxLimit, planMaxLimit);
+
     const dailySent = getDailyOutreachCount();
-    if (dailySent >= settings.dailyLimit) {
-      return { success: false, reason: `Daily limit reached (${dailySent}/${settings.dailyLimit}).` };
+    if (dailySent >= effectiveLimit) {
+      return { success: false, reason: `Daily limit reached (${dailySent}/${effectiveLimit}).` };
     }
 
     // Execute send (in demo mode or manual mode, creates deep link and updates pipeline)

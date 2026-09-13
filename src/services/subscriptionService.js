@@ -222,38 +222,52 @@ export class SubscriptionService {
    * Approval = Requires Plus or Pro
    * Autopilot (Autonomous) = Requires Pro
    */
-  canUseAutopilot(requestedMode = 'manual') {
-    // Manual Mode is a core free feature - always unlocked!
+  canUseAutopilot(requestedMode = null) {
+    const plan = this.getCurrentPlanDetails();
+    const isFree = isFreePlan(plan.id);
+    const isPlus = plan.id === 'plus';
+    const isPro = isProPlan(plan.id);
+
+    // If specifically querying legacy manual mode:
     if (requestedMode === 'manual') {
       return { allowed: true, tier: 'manual' };
     }
 
-    const plan = this.getCurrentPlanDetails();
-    const tier = plan.limits.autopilotMode;
-
-    if (tier === 'none') {
+    if (isFree) {
       return {
         allowed: false,
         tier: 'none',
         requiredPlan: 'plus',
-        reason: 'Approval Mode requires Plus or Pro membership. Upgrade to automate proposal drafting.',
+        badge: 'AVAILABLE ON PLUS & PRO',
+        reason: 'AI Autopilot is available on Plus & Pro. Upgrade to let AI discover, qualify and reach out to the best opportunities for you.',
       };
     }
 
-    if (tier === 'approval_only') {
+    if (isPlus) {
       if (requestedMode === 'autopilot') {
         return {
           allowed: false,
-          tier: 'approval_only',
+          tier: 'limited',
           requiredPlan: 'pro',
+          badge: 'PLUS • LIMITED',
           reason: 'Full Autonomous Mode requires a PRO membership. On PLUS, Autopilot operates safely in Approval Mode.',
         };
       }
-      return { allowed: true, tier: 'approval_only' };
+      return {
+        allowed: true,
+        tier: 'limited',
+        badge: 'PLUS • LIMITED',
+        dailyLimit: 20,
+      };
     }
 
     // Pro tier: full access
-    return { allowed: true, tier: 'full' };
+    return {
+      allowed: true,
+      tier: 'full',
+      badge: 'PRO • FULL ACCESS',
+      dailyLimit: 100,
+    };
   }
 
   /**

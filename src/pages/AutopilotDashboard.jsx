@@ -1,22 +1,27 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Bot, Play, Pause, Settings, RefreshCw, CheckCircle2, 
   Send, Sparkles, AlertCircle, Clock, ShieldCheck, 
   Mail, MessageCircle, Calendar, ChevronRight, Check, 
   X, Filter, Eye, Edit3, ArrowRight, UserCheck, Inbox, 
-  Flame, ExternalLink, Trash2, Crown, Lock 
+  Flame, ExternalLink, Trash2, Crown, Lock, Zap 
 } from 'lucide-react';
 import PageTransition from '../components/PageTransition';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import AutopilotSetupWizard from '../components/AutopilotSetupWizard';
+import AutopilotIntroAnimation from '../components/AutopilotIntroAnimation';
 import LeadDetailsModal from '../components/LeadDetailsModal';
 import OutreachComposerModal from '../components/OutreachComposerModal';
 import UpgradeModal from '../components/UpgradeModal';
-import { subscriptionService } from '../services/subscriptionService';
+import { subscriptionService } from '../services/subscriptionService.js';
 import { useProfile } from '../contexts/ProfileContext';
 import {
+  getUser,
+  hasSeenAutopilotIntro,
+  setSeenAutopilotIntro,
   getLeads,
   updateLead,
   addLead,
@@ -29,8 +34,8 @@ import {
   saveLeads,
 } from '../data/storage.js';
 import { createLead, createAgentActivity, createOutreachMessage, createLeadResearch } from '../data/models.js';
-import { autopilotEngine } from '../services/autopilotEngine';
-import { aiProvider } from '../services/aiProvider';
+import { autopilotEngine } from '../services/autopilotEngine.js';
+import { aiProvider } from '../services/aiProvider.js';
 import toast from 'react-hot-toast';
 
 const TAB_OPTIONS = [
@@ -41,7 +46,18 @@ const TAB_OPTIONS = [
 ];
 
 const AutopilotDashboard = () => {
+  const navigate = useNavigate();
   const { profile } = useProfile();
+
+  const user = getUser();
+  const userId = user?.id || 'default_user';
+  const [showIntro, setShowIntro] = useState(() => !hasSeenAutopilotIntro(userId));
+
+  // Plan tiers
+  const isPro = subscriptionService.isPro();
+  const isPlus = subscriptionService.isPlus();
+  const isFree = subscriptionService.isFree();
+  const effectiveLimit = isPro ? 100 : (isPlus ? 20 : 5);
 
   // Settings & Status
   const [settings, setSettings] = useState(() => getAutopilotSettings());
@@ -76,14 +92,25 @@ const AutopilotDashboard = () => {
     refreshData();
   }, [refreshData]);
 
-  // Check if first-time setup is needed: show wizard ONLY if setup has not been completed
-  useEffect(() => {
+  const handleCompleteIntro = () => {
+    setSeenAutopilotIntro(userId);
+    setShowIntro(false);
     if (!settings.autopilotSetupCompleted) {
+      setShowWizard(true);
+    }
+  };
+
+  // Check if first-time intro or setup wizard is needed
+  useEffect(() => {
+    if (!hasSeenAutopilotIntro(userId)) {
+      setShowIntro(true);
+      setShowWizard(false);
+    } else if (!settings.autopilotSetupCompleted) {
       setShowWizard(true);
     } else {
       setShowWizard(false);
     }
-  }, [settings.autopilotSetupCompleted]);
+  }, [settings.autopilotSetupCompleted, userId]);
 
   // Upgrade Modal State
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
@@ -91,9 +118,8 @@ const AutopilotDashboard = () => {
 
   // Toggle Active / Paused
   const handleToggleStatus = () => {
-    const autopilotCheck = subscriptionService.canUseAutopilot(settings.mode || 'approval');
-    if (!autopilotCheck.allowed) {
-      setUpgradeReason(autopilotCheck.reason);
+    if (subscriptionService.isFree()) {
+      setUpgradeReason('Upgrade to let AI discover, qualify and reach out to opportunities for you.');
       setShowUpgradeModal(true);
       return;
     }
@@ -115,33 +141,14 @@ const AutopilotDashboard = () => {
     refreshData();
   };
 
-  // Change Control Mode
-  const handleChangeMode = (mode) => {
-    const autopilotCheck = subscriptionService.canUseAutopilot(mode);
-    if (!autopilotCheck.allowed) {
-      setUpgradeReason(autopilotCheck.reason);
+  // Run Discovery & Qualification Cycle
+  const handleRunCycle = async () => {
+    if (subscriptionService.isFree()) {
+      setUpgradeReason('Upgrade to let AI discover, qualify and reach out to opportunities for you.');
       setShowUpgradeModal(true);
       return;
     }
 
-    const updated = { ...settings, mode, updatedAt: new Date().toISOString() };
-    saveAutopilotSettings(updated);
-    setSettings(updated);
-
-    logAgentActivity(
-      createAgentActivity({
-        action: 'Control Mode Changed',
-        detail: `Mode switched to ${mode.toUpperCase()}.`,
-        status: 'info',
-      })
-    );
-
-    toast.success(`Operating mode changed to ${mode.toUpperCase()}`);
-    refreshData();
-  };
-
-  // Run Discovery & Qualification Cycle
-  const handleRunCycle = async () => {
     setIsRunningCycle(true);
     const toastId = toast.loading('Agent discovering and qualifying opportunities...');
     try {
@@ -159,6 +166,10 @@ const AutopilotDashboard = () => {
           `Cycle completed: ${result.newlyDiscoveredCount || 0} discovered, ${result.qualifiedCount || 0} qualified!`,
           { id: toastId }
         );
+      } else if (result.code === 'UPGRADE_REQUIRED') {
+        toast.dismiss(toastId);
+        setUpgradeReason(result.reason || 'Upgrade to let AI discover, qualify and reach out to opportunities for you.');
+        setShowUpgradeModal(true);
       } else {
         toast(result.reason || 'Cycle finished.', { id: toastId, icon: 'ℹ️' });
       }
@@ -314,10 +325,19 @@ const AutopilotDashboard = () => {
 
   // Quick Approve individual lead
   const handleQuickApprove = async (leadId) => {
+    if (subscriptionService.isFree()) {
+      setUpgradeReason('Upgrade to let AI discover, qualify and reach out to opportunities for you.');
+      setShowUpgradeModal(true);
+      return;
+    }
+
     const result = await autopilotEngine.approveOutreach(leadId, profile);
     if (result.success) {
       toast.success('Proposal approved and outreach recorded!');
       refreshData();
+    } else if (result.code === 'UPGRADE_REQUIRED') {
+      setUpgradeReason(result.reason || 'Upgrade to let AI discover, qualify and reach out to opportunities for you.');
+      setShowUpgradeModal(true);
     } else {
       toast.error(result.reason || 'Failed to approve');
     }
@@ -325,6 +345,12 @@ const AutopilotDashboard = () => {
 
   // Batch approve selected leads
   const handleBatchApprove = async () => {
+    if (subscriptionService.isFree()) {
+      setUpgradeReason('Upgrade to let AI discover, qualify and reach out to opportunities for you.');
+      setShowUpgradeModal(true);
+      return;
+    }
+
     const ids = Array.from(selectedLeadIds);
     if (ids.length === 0) return;
 
@@ -509,159 +535,147 @@ const AutopilotDashboard = () => {
                 </span>
               </div>
               <div className="flex items-center gap-2 mt-0.5">
-                <span
-                  className={`inline-flex items-center gap-1 text-xs font-semibold ${
-                    settings.status === 'active'
-                      ? 'text-emerald-600 dark:text-emerald-400'
-                      : 'text-amber-600 dark:text-amber-400'
-                  }`}
-                >
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      settings.status === 'active' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
-                    }`}
-                  />
-                  {settings.status === 'active' ? 'Active' : 'Paused'}
-                </span>
-                <span className="text-text-muted text-xs">•</span>
-                <span className="text-xs text-text-secondary capitalize">
-                  {settings.mode} Mode
-                </span>
+                {isFree ? (
+                  <span className="text-xs font-semibold text-primary">
+                    Available on Plus & Pro
+                  </span>
+                ) : (
+                  <>
+                    <span
+                      className={`inline-flex items-center gap-1 text-xs font-semibold ${
+                        settings.status === 'active'
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : 'text-amber-600 dark:text-amber-400'
+                      }`}
+                    >
+                      <span
+                        className={`w-2 h-2 rounded-full ${
+                          settings.status === 'active' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                        }`}
+                      />
+                      {settings.status === 'active' ? 'Active' : 'Paused'}
+                    </span>
+                    <span className="text-text-muted text-xs">•</span>
+                    <span className="text-[11px] font-bold px-1.5 py-0.2 rounded bg-primary/10 text-primary uppercase">
+                      {isPro ? 'Pro • Full Access' : 'Plus • Limited'}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
 
-          {/* Quick Action Controls: Pause / Resume only */}
-          <div className="flex items-center">
-            <button
-              onClick={handleToggleStatus}
-              className={`p-2.5 rounded-xl border transition-all ${
-                settings.status === 'active'
-                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20'
-                  : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20'
-              }`}
-              title={settings.status === 'active' ? 'Pause Autopilot' : 'Resume Autopilot'}
-            >
-              {settings.status === 'active' ? <Pause size={16} /> : <Play size={16} />}
-            </button>
-          </div>
+          {/* Quick Action Controls: Pause / Resume only when NOT on Free */}
+          {!isFree && (
+            <div className="flex items-center">
+              <button
+                onClick={handleToggleStatus}
+                className={`p-2.5 rounded-xl border transition-all ${
+                  settings.status === 'active'
+                    ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20'
+                    : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20'
+                }`}
+                title={settings.status === 'active' ? 'Pause Autopilot' : 'Resume Autopilot'}
+              >
+                {settings.status === 'active' ? <Pause size={16} /> : <Play size={16} />}
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Plan Lock Banner if on Free */}
-        {(() => {
-          const plan = subscriptionService.getCurrentPlanDetails();
-          if (plan.limits.autopilotMode === 'none') {
-            return (
-              <div className="p-3.5 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-primary text-white flex items-center justify-center flex-shrink-0">
-                    <Lock size={16} />
-                  </div>
-                  <div>
-                    <span className="text-xs font-bold text-text-primary block">
-                      Manual Mode Unlocked • Autopilot Locked on Free
-                    </span>
-                    <span className="text-[10px] text-text-muted">
-                      Manual outreach is 100% free. Upgrade to Plus or Pro to unlock AI Approval & Autonomous Autopilot.
-                    </span>
-                  </div>
+        {/* Free Plan Upgrade Banner */}
+        {isFree && (
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-primary/15 to-purple-500/10 border border-primary/25 space-y-2.5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-primary text-white flex items-center justify-center flex-shrink-0 shadow-md">
+                  <Sparkles size={18} />
                 </div>
-                <button
-                  onClick={() => {
-                    setUpgradeReason('Upgrade to Plus or Pro to unlock Approval Mode and Autonomous Autopilot.');
-                    setShowUpgradeModal(true);
-                  }}
-                  className="px-2.5 py-1.5 rounded-xl bg-primary text-white text-xs font-bold shadow-sm whitespace-nowrap ml-2"
-                >
-                  Upgrade
-                </button>
-              </div>
-            );
-          }
-          return null;
-        })()}
-
-        {/* Control Mode Switcher Banner */}
-        <div className="p-3 bg-surface rounded-2xl border border-border flex items-center justify-between shadow-sm">
-          <div className="flex items-center gap-2">
-            <ShieldCheck size={18} className="text-primary flex-shrink-0" />
-            <div>
-              <div className="text-xs font-semibold text-text-primary">Control Mode</div>
-              <div className="text-[11px] text-text-secondary">
-                {settings.mode === 'approval'
-                  ? 'User approval required before sending'
-                  : settings.mode === 'manual'
-                  ? 'Manual drafting & sending'
-                  : 'Autonomous sending within daily limit'}
+                <div>
+                  <span className="text-xs font-bold text-text-primary block">
+                    AI Autopilot is available on Plus & Pro
+                  </span>
+                  <span className="text-[11px] text-text-secondary leading-snug">
+                    Let AI discover, qualify and reach out to the best opportunities for you.
+                  </span>
+                </div>
               </div>
             </div>
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                onClick={() => {
+                  setUpgradeReason('Upgrade to let AI discover, qualify and reach out to opportunities for you.');
+                  setShowUpgradeModal(true);
+                }}
+                className="px-3 py-1.5 rounded-xl bg-primary text-white text-xs font-bold shadow-sm hover:opacity-95 transition-opacity"
+              >
+                Upgrade to Plus
+              </button>
+              <button
+                onClick={() => navigate('/membership')}
+                className="px-3 py-1.5 rounded-xl bg-surface border border-border text-text-secondary hover:text-text-primary text-xs font-semibold transition-colors"
+              >
+                View Plans
+              </button>
+            </div>
           </div>
+        )}
 
-          {/* 3-Way Mode Pill Selector */}
-          <div className="flex p-1 bg-surface-hover/50 rounded-xl border border-border/80 text-[11px]">
-            {['manual', 'approval', 'autopilot'].map((m) => {
-              const check = subscriptionService.canUseAutopilot(m);
-              const isLocked = !check.allowed;
-
-              return (
-                <button
-                  key={m}
-                  onClick={() => handleChangeMode(m)}
-                  className={`px-2 py-1 rounded-lg font-semibold capitalize transition-all flex items-center gap-1 ${
-                    settings.mode === m
-                      ? 'bg-surface text-primary shadow-sm border border-border/60'
-                      : 'text-text-secondary hover:text-text-primary'
-                  }`}
-                >
-                  <span>{m}</span>
-                  {isLocked && (
-                    <Lock size={9} className="text-amber-500" />
-                  )}
-                </button>
-              );
-            })}
+        {/* Plus Active Status Banner */}
+        {isPlus && (
+          <div className="p-2.5 px-3.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs text-blue-400 flex items-center gap-2">
+            <ShieldCheck size={16} className="flex-shrink-0" />
+            <span>Autopilot is running within your Plus limits.</span>
           </div>
-        </div>
+        )}
 
-        {/* Live Stats Cards Grid (Strictly calculated, never fabricated) */}
+        {/* Pro Active Status Banner */}
+        {isPro && (
+          <div className="p-2.5 px-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400 flex items-center gap-2">
+            <Crown size={16} className="flex-shrink-0" />
+            <span>Autopilot is running with full Pro automation.</span>
+          </div>
+        )}
+
+        {/* Live Stats Cards Grid */}
         <div className="grid grid-cols-3 gap-2.5">
           <div className="p-3 rounded-2xl border border-border bg-surface">
             <div className="text-[10px] text-text-muted font-bold uppercase tracking-wider">Discovered</div>
             <div className="text-lg font-black text-text-primary mt-1">{stats.opportunitiesFound}</div>
-            <div className="text-[10px] text-text-secondary mt-0.5">Total Opps</div>
+            <div className="text-[10px] text-text-secondary mt-0.5">Total opportunities</div>
           </div>
 
           <div className="p-3 rounded-2xl border border-border bg-surface">
             <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold uppercase tracking-wider">Qualified</div>
             <div className="text-lg font-black text-emerald-600 dark:text-emerald-400 mt-1">{stats.qualifiedLeads}</div>
-            <div className="text-[10px] text-text-secondary mt-0.5">Score &gt; 60%</div>
+            <div className="text-[10px] text-text-secondary mt-0.5">Matching opportunities</div>
           </div>
 
           <div className="p-3 rounded-2xl border border-border bg-surface">
-            <div className="text-[10px] text-primary font-bold uppercase tracking-wider">Ready Queue</div>
+            <div className="text-[10px] text-primary font-bold uppercase tracking-wider">Ready</div>
             <div className="text-lg font-black text-primary mt-1">{approvalQueue.length}</div>
-            <div className="text-[10px] text-text-secondary mt-0.5">Proposals Ready</div>
+            <div className="text-[10px] text-text-secondary mt-0.5">Proposals ready</div>
           </div>
 
           <div className="p-3 rounded-2xl border border-border bg-surface">
             <div className="text-[10px] text-text-muted font-bold uppercase tracking-wider">Sent Today</div>
             <div className="text-lg font-black text-text-primary mt-1">
               {stats.sentToday}
-              <span className="text-xs text-text-muted font-normal"> / {settings.dailyLimit}</span>
+              <span className="text-xs text-text-muted font-normal"> / {effectiveLimit}</span>
             </div>
-            <div className="text-[10px] text-text-secondary mt-0.5">Daily Limit Cap</div>
+            <div className="text-[10px] text-text-secondary mt-0.5">Applications sent today</div>
           </div>
 
           <div className="p-3 rounded-2xl border border-border bg-surface">
             <div className="text-[10px] text-purple-600 dark:text-purple-400 font-bold uppercase tracking-wider">Replies</div>
             <div className="text-lg font-black text-purple-600 dark:text-purple-400 mt-1">{stats.repliesCount}</div>
-            <div className="text-[10px] text-text-secondary mt-0.5">Responses</div>
+            <div className="text-[10px] text-text-secondary mt-0.5">Responses received</div>
           </div>
 
           <div className="p-3 rounded-2xl border border-border bg-surface">
             <div className="text-[10px] text-amber-600 dark:text-amber-400 font-bold uppercase tracking-wider">Meetings</div>
             <div className="text-lg font-black text-amber-600 dark:text-amber-400 mt-1">{stats.meetingsCount}</div>
-            <div className="text-[10px] text-text-secondary mt-0.5">Intro Calls</div>
+            <div className="text-[10px] text-text-secondary mt-0.5">Intro calls</div>
           </div>
         </div>
 
@@ -677,6 +691,60 @@ const AutopilotDashboard = () => {
           >
             Run Discovery & Qualification Cycle
           </Button>
+        </div>
+
+        {/* How Autopilot Works Section */}
+        <div className="p-4 rounded-2xl bg-surface border border-border shadow-sm space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+                <Bot size={14} />
+              </div>
+              <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider">
+                How Autopilot Works
+              </h3>
+            </div>
+            <span className="text-[10px] text-text-muted">6-Step Intelligent Engine</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="p-2.5 rounded-xl bg-surface-hover/50 border border-border/60">
+              <div className="text-primary font-bold text-[10px]">01 Discover</div>
+              <p className="text-[11px] text-text-secondary mt-0.5 leading-snug">
+                Scans connected opportunity sources.
+              </p>
+            </div>
+            <div className="p-2.5 rounded-xl bg-surface-hover/50 border border-border/60">
+              <div className="text-primary font-bold text-[10px]">02 Qualify</div>
+              <p className="text-[11px] text-text-secondary mt-0.5 leading-snug">
+                Filters low-quality and irrelevant opportunities.
+              </p>
+            </div>
+            <div className="p-2.5 rounded-xl bg-surface-hover/50 border border-border/60">
+              <div className="text-primary font-bold text-[10px]">03 Match</div>
+              <p className="text-[11px] text-text-secondary mt-0.5 leading-snug">
+                Checks opportunities against your profile.
+              </p>
+            </div>
+            <div className="p-2.5 rounded-xl bg-surface-hover/50 border border-border/60">
+              <div className="text-primary font-bold text-[10px]">04 Personalize</div>
+              <p className="text-[11px] text-text-secondary mt-0.5 leading-snug">
+                Creates a tailored application.
+              </p>
+            </div>
+            <div className="p-2.5 rounded-xl bg-surface-hover/50 border border-border/60">
+              <div className="text-primary font-bold text-[10px]">05 Reach Out</div>
+              <p className="text-[11px] text-text-secondary mt-0.5 leading-snug">
+                Uses available contact channels within your plan.
+              </p>
+            </div>
+            <div className="p-2.5 rounded-xl bg-surface-hover/50 border border-border/60">
+              <div className="text-primary font-bold text-[10px]">06 Track</div>
+              <p className="text-[11px] text-text-secondary mt-0.5 leading-snug">
+                Tracks applications and replies.
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Sub-Navigation Tabs */}
@@ -1164,6 +1232,12 @@ const AutopilotDashboard = () => {
         )}
 
         {/* Modals */}
+        <AutopilotIntroAnimation
+          isOpen={showIntro}
+          onClose={handleCompleteIntro}
+          onComplete={handleCompleteIntro}
+        />
+
         <AutopilotSetupWizard
           isOpen={showWizard}
           onClose={() => setShowWizard(false)}
@@ -1191,8 +1265,20 @@ const AutopilotDashboard = () => {
         <UpgradeModal
           isOpen={showUpgradeModal}
           onClose={() => setShowUpgradeModal(false)}
-          title="Autopilot Plan Locked"
-          message={upgradeReason}
+          title="AI Autopilot"
+          subtitle="Available on Plus & Pro"
+          headline="Automate Your Opportunities"
+          message={upgradeReason || 'Upgrade to let AI discover, qualify and reach out to opportunities for you.'}
+          primaryCtaText="Upgrade to Plus"
+          onPrimaryCta={() => {
+            setShowUpgradeModal(false);
+            navigate('/membership');
+          }}
+          secondaryCtaText="View Plans"
+          onSecondaryCta={() => {
+            setShowUpgradeModal(false);
+            navigate('/membership');
+          }}
         />
       </div>
     </PageTransition>

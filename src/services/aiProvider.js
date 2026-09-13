@@ -14,8 +14,8 @@
  * or routes to live LLM endpoint when VITE_AI_API_KEY is configured.
  */
 
-import { qualifyLead } from './leadQualificationEngine';
-import { personalizationService } from './personalizationService';
+import { qualifyLead } from './leadQualificationEngine.js';
+import { personalizationService } from './personalizationService.js';
 
 export class AIProvider {
   isConfigured() {

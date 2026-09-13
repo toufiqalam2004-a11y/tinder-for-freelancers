@@ -46,6 +46,8 @@ export function createUser(fields = {}) {
     experience: fields.experience || '',
     yearsOfExperience: fields.yearsOfExperience !== undefined ? Number(fields.yearsOfExperience) : 3,
     bio: fields.bio || '',
+    avatarUrl: fields.avatarUrl || fields.photoUrl || '',
+    photoUrl: fields.photoUrl || fields.avatarUrl || '',
     portfolioUrl: fields.portfolioUrl || (portfolioLinks[0]?.url || ''),
     portfolioLinks,
     cvUrl: fields.cvUrl || '',
