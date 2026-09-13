@@ -95,6 +95,25 @@ export const apiClient = {
   },
 
   /**
+   * Invalidate session token on server
+   */
+  async logout(token) {
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const res = await fetch(`${API_BASE}/auth/logout`, {
+        method: 'POST',
+        headers,
+      });
+      return await res.json().catch(() => ({ success: true }));
+    } catch {
+      return { success: true };
+    }
+  },
+
+  /**
    * Sync a Source through the backend pipeline
    */
   async syncSource(source) {

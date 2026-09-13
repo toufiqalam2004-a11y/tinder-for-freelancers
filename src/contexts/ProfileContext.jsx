@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, useCallback, useMemo } from 'react';
-import { getUser, saveUser as persistUser } from '../data/storage.js';
+import { createContext, useContext, useState, useCallback, useMemo, useEffect } from 'react';
+import { getUser, saveUser as persistUser, getCurrentUserId } from '../data/storage.js';
 import { createUser } from '../data/models.js';
 
 const ProfileContext = createContext(null);
@@ -7,8 +7,20 @@ const ProfileContext = createContext(null);
 export function ProfileProvider({ children }) {
   const [profile, setProfile] = useState(() => getUser());
 
+  useEffect(() => {
+    const handleAuthChange = () => {
+      setProfile(getUser());
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('tf_auth_changed', handleAuthChange);
+      return () => window.removeEventListener('tf_auth_changed', handleAuthChange);
+    }
+  }, []);
+
   const saveProfile = useCallback((data) => {
-    const user = createUser({ ...profile, ...data, updatedAt: new Date().toISOString() });
+    const currentUid = getCurrentUserId();
+    const current = getUser(currentUid) || profile || {};
+    const user = createUser({ ...current, ...data, id: current.id || (currentUid !== 'user-default' ? currentUid : undefined), updatedAt: new Date().toISOString() });
     setProfile(user);
     persistUser(user);
   }, [profile]);

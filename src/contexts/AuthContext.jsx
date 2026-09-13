@@ -177,6 +177,10 @@ export function AuthProvider({ children }) {
   }, [phone, countryCode, localNumber]);
 
   const logout = useCallback(() => {
+    const currentAuth = getAuth() || {};
+    if (currentAuth.token) {
+      apiClient.logout(currentAuth.token).catch(() => {});
+    }
     setIsAuthenticated(false);
     setPhone('');
     setVerificationId(null);

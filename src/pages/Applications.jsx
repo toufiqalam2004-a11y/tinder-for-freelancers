@@ -36,6 +36,7 @@ import {
   setAutoDeletePreference,
   cleanupOldApplications,
   isDemoMode,
+  getCurrentUserId,
 } from '../data/storage.js';
 import { APPLICATION_STATUS_CONFIG } from '../utils/constants';
 import toast from 'react-hot-toast';
@@ -122,7 +123,9 @@ const Applications = () => {
     refreshApplications();
   };
 
+  const currentUid = getCurrentUserId();
   const filteredApps = applications.filter((app) => {
+    if (app.userId && app.userId !== currentUid && app.userId !== 'user-default') return false;
     if (activeTab === 'all') return true;
     return (app.status || 'applied').toLowerCase() === activeTab.toLowerCase();
   });

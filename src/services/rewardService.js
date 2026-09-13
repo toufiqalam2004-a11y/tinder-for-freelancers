@@ -95,10 +95,21 @@ export class RewardService {
   /**
    * Local Reward Cache Helpers
    */
+  getRewardCacheKey() {
+    const uid = getStoredUserId() || 'default';
+    return `tf_rewards_cache_${uid}`;
+  }
+
   getRewardCache() {
     try {
-      const raw = safeGetItem(REWARDS_CACHE_KEY);
-      return raw ? JSON.parse(raw) : { rewardCredits: 0, lastDailyLoginRewardDate: null, claimedToday: false };
+      const key = this.getRewardCacheKey();
+      const raw = safeGetItem(key);
+      if (raw) return JSON.parse(raw);
+      if (key === 'tf_rewards_cache_default') {
+        const legacy = safeGetItem(REWARDS_CACHE_KEY);
+        if (legacy) return JSON.parse(legacy);
+      }
+      return { rewardCredits: 0, lastDailyLoginRewardDate: null, claimedToday: false };
     } catch {
       return { rewardCredits: 0, lastDailyLoginRewardDate: null, claimedToday: false };
     }
@@ -106,8 +117,10 @@ export class RewardService {
 
   setRewardCache(data) {
     try {
+      const key = this.getRewardCacheKey();
       const current = this.getRewardCache();
       const updated = { ...current, ...data };
+      safeSetItem(key, JSON.stringify(updated));
       safeSetItem(REWARDS_CACHE_KEY, JSON.stringify(updated));
       safeDispatchEvent('tf_rewards_changed', updated);
       return updated;

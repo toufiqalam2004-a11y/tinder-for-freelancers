@@ -41,11 +41,21 @@ export function setAuth(auth) {
   setItem(STORAGE_KEYS.AUTH, auth);
   // Every fresh login or logout resets the session photo state
   clearAllSessionPhotos();
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new CustomEvent('tf_auth_changed', { detail: auth }));
+  }
 }
 
 // User Profile Data (Persistent except profile photo which is session-only)
-export function getUser() {
-  const user = getItem(STORAGE_KEYS.USER);
+export function getUser(userId = null) {
+  const uid = userId || getCurrentUserId();
+  let user = null;
+  if (uid && uid !== 'user-default') {
+    user = getItem(`tf_user_${uid}`);
+  }
+  if (!user) {
+    user = getItem(STORAGE_KEYS.USER);
+  }
   if (user) {
     // Ensure avatarUrl/photoUrl are NEVER permanently restored from localStorage
     delete user.avatarUrl;
@@ -56,8 +66,12 @@ export function getUser() {
 
 export function saveUser(user) {
   if (user) {
+    const uid = user.phone || user.id || getCurrentUserId();
     // Do NOT persist avatarUrl or photoUrl to localStorage
     const { avatarUrl, photoUrl, ...persistentData } = user;
+    if (uid && uid !== 'user-default') {
+      setItem(`tf_user_${uid}`, persistentData);
+    }
     setItem(STORAGE_KEYS.USER, persistentData);
   }
 }
@@ -339,8 +353,13 @@ export function saveMonitoringState(sourceId, data) {
 }
 
 // Applications (V3 Enhanced)
-export function getApplications() {
-  return getItem(STORAGE_KEYS.APPLICATIONS) || [];
+export function getApplications(userId = null) {
+  const all = getItem(STORAGE_KEYS.APPLICATIONS) || [];
+  const uid = userId || getCurrentUserId();
+  if (uid && uid !== 'user-default') {
+    return all.filter((a) => !a.userId || a.userId === uid || a.userId === 'user-default');
+  }
+  return all;
 }
 
 export function saveApplications(apps) {
@@ -349,12 +368,12 @@ export function saveApplications(apps) {
 
 export function getCurrentUserId() {
   const auth = getAuth();
-  if (auth && (auth.phone || auth.userId)) {
-    return auth.phone || auth.userId;
+  if (auth && auth.isAuthenticated && (auth.phone || auth.userId)) {
+    return auth.userId || auth.phone;
   }
-  const user = getUser();
-  if (user && user.id) {
-    return user.id;
+  const user = getItem(STORAGE_KEYS.USER);
+  if (user && (user.id || user.phone)) {
+    return user.id || user.phone;
   }
   return 'user-default';
 }
@@ -533,9 +552,15 @@ export function getTrashedApplications() {
   return getItem(STORAGE_KEYS.APPLICATIONS_TRASH) || [];
 }
 
-export function getApplicationById(id) {
-  const apps = getApplications();
-  return apps.find((a) => a.id === id) || null;
+export function getApplicationById(id, userId = null) {
+  const uid = userId || getCurrentUserId();
+  const apps = getItem(STORAGE_KEYS.APPLICATIONS) || [];
+  const app = apps.find((a) => a.id === id) || null;
+  if (!app) return null;
+  if (uid && uid !== 'user-default' && app.userId && app.userId !== uid && app.userId !== 'user-default') {
+    return null;
+  }
+  return app;
 }
 
 export function getApplicationByJobId(jobId, userId = null) {
@@ -1010,11 +1035,16 @@ export function getUserPreferences() {
     },
   };
 
-  const stored = getItem(STORAGE_KEYS.USER_PREFERENCES);
+  const uid = userId || getCurrentUserId();
+  const key = `tf_user_preferences_${uid}`;
+  const stored = getItem(key) || (uid === 'user-default' ? getItem(STORAGE_KEYS.USER_PREFERENCES) : null);
   return stored ? { ...defaultPrefs, ...stored } : defaultPrefs;
 }
 
-export function saveUserPreferences(prefs) {
+export function saveUserPreferences(prefs, userId = null) {
+  const uid = userId || getCurrentUserId();
+  const key = `tf_user_preferences_${uid}`;
+  setItem(key, prefs);
   setItem(STORAGE_KEYS.USER_PREFERENCES, prefs);
 }
 
@@ -1140,19 +1170,33 @@ export function deleteAccount() {
 /**
  * Subscription & Usage Storage Helpers
  */
-export function getStoredSubscription() {
+export function getStoredSubscription(userId = null) {
+  const uid = userId || getCurrentUserId();
+  const key = `tf_sub_${uid}`;
+  const sub = getItem(key);
+  if (sub) return sub;
   return getItem(STORAGE_KEYS.SUBSCRIPTION);
 }
 
-export function setStoredSubscription(sub) {
+export function setStoredSubscription(sub, userId = null) {
+  const uid = userId || getCurrentUserId();
+  const key = `tf_sub_${uid}`;
+  setItem(key, sub);
   setItem(STORAGE_KEYS.SUBSCRIPTION, sub);
 }
 
-export function getStoredDailyUsage() {
+export function getStoredDailyUsage(userId = null) {
+  const uid = userId || getCurrentUserId();
+  const key = `tf_daily_usage_${uid}`;
+  const usage = getItem(key);
+  if (usage) return usage;
   return getItem(STORAGE_KEYS.DAILY_USAGE);
 }
 
-export function setStoredDailyUsage(usage) {
+export function setStoredDailyUsage(usage, userId = null) {
+  const uid = userId || getCurrentUserId();
+  const key = `tf_daily_usage_${uid}`;
+  setItem(key, usage);
   setItem(STORAGE_KEYS.DAILY_USAGE, usage);
 }
 
