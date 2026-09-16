@@ -44,7 +44,13 @@ function parseOrigins(val) {
     .filter(Boolean);
 }
 
+const KNOWN_DEPLOYMENT_ORIGINS = [
+  'https://tinder-for-freelancers.vercel.app',
+  'https://tinder-for-freelancers.onrender.com',
+];
+
 const configuredOrigins = [
+  ...KNOWN_DEPLOYMENT_ORIGINS,
   ...parseOrigins(process.env.ALLOWED_ORIGINS),
   ...parseOrigins(process.env.FRONTEND_ORIGIN),
   ...parseOrigins(process.env.FRONTEND_URL),
@@ -74,30 +80,46 @@ const allowedBaseDomains = configuredOrigins
 const isAllowedOrigin = (origin) => {
   if (!origin) return true; // Mobile apps, curl, server-to-server
 
-  // Development: allow localhost, 127.0.0.1, LAN IPs
-  if (!IS_PROD) {
-    if (
-      origin === 'http://localhost:3000' ||
-      origin === 'http://127.0.0.1:3000' ||
-      /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)
-    ) {
-      return true;
-    }
+  // Development & local environments
+  if (
+    origin === 'http://localhost:3000' ||
+    origin === 'http://127.0.0.1:3000' ||
+    origin === 'http://localhost:5000' ||
+    origin === 'http://127.0.0.1:5000' ||
+    origin === 'http://localhost:5173' ||
+    origin === 'http://127.0.0.1:5173' ||
+    /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)
+  ) {
+    return true;
   }
 
-  // Exact match against any configured origin
+  // Exact match against any configured or known origin
   if (configuredOrigins.includes(origin)) {
     return true;
   }
 
-  // Railway deployment origins
-  if (origin.endsWith('.railway.app') || origin.endsWith('.up.railway.app')) {
-    return true;
+  // Cloud platform deployment origins (Vercel, Render, Railway)
+  try {
+    const originHost = new URL(origin).hostname.toLowerCase();
+    if (
+      originHost === 'vercel.app' ||
+      originHost.endsWith('.vercel.app') ||
+      originHost === 'onrender.com' ||
+      originHost.endsWith('.onrender.com') ||
+      originHost === 'railway.app' ||
+      originHost.endsWith('.railway.app') ||
+      originHost.endsWith('.up.railway.app')
+    ) {
+      return true;
+    }
+  } catch {
+    // Malformed origin
+    return false;
   }
 
   // Subdomain matching against configured production base domains (e.g. app.yourdomain.com, admin.yourdomain.com)
   try {
-    const originHost = new URL(origin).hostname;
+    const originHost = new URL(origin).hostname.toLowerCase();
     for (const baseDomain of allowedBaseDomains) {
       if (baseDomain && (originHost === baseDomain || originHost.endsWith(`.${baseDomain}`))) {
         return true;
@@ -116,13 +138,17 @@ app.use(
       if (isAllowedOrigin(origin)) {
         callback(null, true);
       } else {
-        callback(new Error('CORS policy violation: Origin not allowed.'));
+        // Safe rejection without passing an Error to next(), preventing 500 internal server error
+        callback(null, false);
       }
     },
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
     allowedHeaders: [
       'Content-Type',
       'Authorization',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
       'x-user-id',
       'x-admin-key',
       'x-phone',
@@ -130,6 +156,7 @@ app.use(
       'x-test-clock-skew',
     ],
     credentials: true,
+    optionsSuccessStatus: 204,
   })
 );
 
