@@ -24,6 +24,7 @@ export default function Membership() {
   // State
   const [sub, setSub] = useState(() => subscriptionService.getSubscription());
   const [currency, setCurrency] = useState(() => subscriptionService.getCurrency());
+  const [billingInterval, setBillingInterval] = useState('monthly'); // 'monthly' | 'annual'
   const [todayUsage, setTodayUsage] = useState(() => usageService.getTodayUsage());
   const [creditsSummary, setCreditsSummary] = useState(() => usageService.getCreditsSummary());
   const [rewardCredits, setRewardCredits] = useState(() => rewardService.getRewardCredits());
@@ -70,32 +71,48 @@ export default function Membership() {
     toast.success('Currency switched to ' + (newCurr === 'INR' ? '₹ INR' : '$ USD'));
   };
 
+  // Cancel Scheduled Downgrade
+  const handleCancelDowngrade = () => {
+    subscriptionService.cancelDowngrade();
+    toast.success('Downgrade cancelled. Your subscription continues uninterrupted!');
+    refreshAll();
+  };
+
   // Open Checkout for a Plan
   const handleSelectPlan = (planKey) => {
     const plan = SUBSCRIPTION_PLANS[planKey];
-    if (normalizePlan(plan.id) === normalizePlan(sub.plan)) {
+    if (normalizePlan(plan.id) === normalizePlan(sub.plan) && (sub.interval || 'monthly') === billingInterval) {
       toast('You are currently on this plan.', { icon: 'ℹ️' });
       return;
     }
 
     if (plan.id === 'free') {
-      subscriptionService.changePlan('free', currency);
-      toast.success('Switched to Free plan.');
+      if (normalizePlan(sub.plan) !== 'free') {
+        subscriptionService.scheduleDowngrade('free');
+        toast.success('Downgrade scheduled for period end. Pro features stay active until then.');
+      } else {
+        subscriptionService.changePlan('free', currency, 30, { immediate: true });
+        toast.success('Switched to Free plan.');
+      }
       refreshAll();
       return;
     }
 
-    const price = plan.prices[currency];
+    const price = (plan.prices[billingInterval] && plan.prices[billingInterval][currency]) !== undefined
+      ? plan.prices[billingInterval][currency]
+      : plan.prices[currency];
     const formatted = subscriptionService.formatPrice(price, currency);
 
     setCheckoutType('plan');
     setCheckoutItem({
       planId: plan.id,
-      title: plan.name + ' Membership',
-      subtitle: plan.tagline + ' • 30 Days Access',
+      title: plan.name + ' Membership (' + (billingInterval === 'annual' ? 'Annual' : 'Monthly') + ')',
+      subtitle: plan.tagline + ' • ' + (billingInterval === 'annual' ? '365 Days Access' : '30 Days Access'),
       currency,
       price,
       priceFormatted: formatted,
+      interval: billingInterval,
+      durationDays: billingInterval === 'annual' ? 365 : 30,
     });
     setIsCheckoutOpen(true);
   };
@@ -118,10 +135,18 @@ export default function Membership() {
   };
 
   const currentPlan = subscriptionService.getCurrentPlanDetails();
-  const dailyLimit = currentPlan.limits.applicationsPerDay;
-  const usedToday = todayUsage.applicationsUsed || 0;
-  const remainingDaily = Math.max(0, dailyLimit - usedToday);
-  const dailyPct = Math.min(100, Math.round((usedToday / dailyLimit) * 100));
+  const quotaStatus = usageService.getQuotaStatus();
+  const limit = quotaStatus.limit;
+  const used = quotaStatus.used;
+  const remainingQuota = quotaStatus.remainingQuota;
+  const refillFormatted = quotaStatus.refillFormatted;
+  const bonusTokens = quotaStatus.bonusTokens;
+  const isExhausted = quotaStatus.isExhausted;
+  const quotaPct = Math.min(100, Math.round((used / limit) * 100));
+  const dailyLimit = limit;
+  const usedToday = used;
+  const remainingDaily = remainingQuota;
+  const dailyPct = quotaPct;
 
   const aiLimit = currentPlan.limits.aiApplyPerDay;
   const aiUsed = todayUsage.aiApplyUsed || 0;
@@ -207,22 +232,62 @@ export default function Membership() {
             </div>
           </div>
 
+          {/* Downgrade Scheduled Notification */}
+          {sub.cancelAtPeriodEnd && (
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3 text-xs">
+              <div className="space-y-0.5 min-w-0">
+                <span className="font-bold text-amber-500 flex items-center gap-1">
+                  <Clock size={14} className="shrink-0" />
+                  <span>Downgrade Scheduled</span>
+                </span>
+                <p className="text-[11px] text-text-secondary">
+                  Your {currentPlan.name} features remain fully active until{' '}
+                  {sub.endDate ? new Date(sub.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'period end'}.
+                </p>
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleCancelDowngrade}
+                className="whitespace-nowrap shrink-0 text-xs py-1 px-3"
+              >
+                Keep {currentPlan.name}
+              </Button>
+            </div>
+          )}
+
           {/* Progress Bars */}
           <div className="space-y-2.5 pt-1">
-            {/* Daily Application Quota */}
+            {/* Rolling 8-Hour Application Quota */}
             <div>
               <div className="flex justify-between text-xs mb-1">
                 <span className="font-medium text-text-secondary">
-                  Today's Applications: <strong className="text-text-primary">{usedToday} / {dailyLimit}</strong>
+                  Applications: <strong className="text-text-primary">{used} / {limit}</strong>
                 </span>
-                <span className="font-bold text-primary">{remainingDaily} remaining</span>
+                <span className="text-text-muted">
+                  Refreshes in: <strong className="text-primary">{refillFormatted}</strong>
+                </span>
               </div>
               <div className="w-full bg-surface-hover h-2 rounded-full overflow-hidden">
                 <div
                   className="h-full gradient-primary rounded-full transition-all duration-500"
-                  style={{ width: dailyPct + '%' }}
+                  style={{ width: quotaPct + '%' }}
                 />
               </div>
+
+              {isExhausted && (
+                <div className="mt-2 p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 dark:text-amber-400 flex flex-col gap-0.5">
+                  <div className="flex items-center justify-between font-bold">
+                    <span>Application quota exhausted</span>
+                    <span>Next refill in {refillFormatted}</span>
+                  </div>
+                  {bonusTokens > 0 && (
+                    <span className="text-[11px] text-text-primary">
+                      Bonus tokens available: {bonusTokens} (you can still apply!)
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* AI Apply Generations */}
@@ -242,33 +307,60 @@ export default function Membership() {
             </div>
           </div>
 
-          {/* Application Balances: Remaining Quota + Reward Credits + Purchased Credits */}
-          <div className="p-3 rounded-xl bg-surface-hover/70 border border-border flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-500 flex items-center justify-center font-bold">
-                <Sparkles size={14} />
+          {/* Application Balances: Included Quota + Separate Bonus Tokens + Purchased Credits */}
+          <div className="p-3 rounded-xl bg-surface-hover/70 border border-border space-y-2 text-xs">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-500 flex items-center justify-center font-bold">
+                  <Sparkles size={14} />
+                </div>
+                <div>
+                  <span className="font-bold text-text-primary block">
+                    {quotaStatus.availableApplications} Total Available Applications
+                  </span>
+                  <span className="text-[10px] text-text-muted">
+                    {remainingQuota} included quota • {bonusTokens > 0 ? `Bonus Tokens: +${bonusTokens}` : '0 bonus tokens'} • {creditsSummary.activeCredits} top-up credits
+                  </span>
+                </div>
               </div>
-              <div>
-                <span className="font-bold text-text-primary block">
-                  {remainingDaily + rewardCredits + creditsSummary.activeCredits} Total Available Applications
-                </span>
-                <span className="text-[10px] text-text-muted">
-                  {remainingDaily} quota • {rewardCredits} reward credits • {creditsSummary.activeCredits} top-up credits
-                </span>
-              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const el = document.getElementById('credits-section');
+                  if (el) el.scrollIntoView({ behavior: 'smooth' });
+                }}
+                className="text-[11px] font-bold text-primary hover:underline shrink-0"
+              >
+                + Add Credits
+              </button>
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                const el = document.getElementById('credits-section');
-                if (el) el.scrollIntoView({ behavior: 'smooth' });
-              }}
-              className="text-[11px] font-bold text-primary hover:underline"
-            >
-              + Add Credits
-            </button>
+            {bonusTokens > 0 && (
+              <div className="flex items-center justify-between text-[11px] pt-1.5 border-t border-border/60 text-text-secondary">
+                <span className="font-bold text-amber-500">Bonus Tokens: +{bonusTokens}</span>
+                <span className="text-[10px] text-text-muted">Consumed separately from 8h quota</span>
+              </div>
+            )}
           </div>
+
+          {/* Free 3-Day Login Streak Engagement Card */}
+          {normalizePlan(sub.plan) === 'free' && (
+            <div className="p-3 rounded-xl bg-primary/5 border border-primary/20 text-xs space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-text-primary flex items-center gap-1">
+                  <span>🔥</span>
+                  <span>Free 3-Day Login Streak</span>
+                </span>
+                <span className="text-[10px] font-black text-primary px-2 py-0.5 rounded-full bg-primary/10">
+                  +2 Bonus Tokens
+                </span>
+              </div>
+              <p className="text-[11px] text-text-secondary leading-snug">
+                Log in 3 consecutive calendar days to receive +2 bonus Application Tokens. Bonus tokens never expire and stay separate from your 8-hour refill quota.
+              </p>
+            </div>
+          )}
         </Card>
 
         {/* Rewards & Referral Section */}
@@ -276,14 +368,49 @@ export default function Membership() {
 
         {/* Plan Selection Cards */}
         <div className="space-y-3">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-text-secondary flex items-center gap-1.5">
-            <Layers size={14} className="text-primary" />
-            <span>Choose Your Plan</span>
-          </h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-text-secondary flex items-center gap-1.5">
+              <Layers size={14} className="text-primary" />
+              <span>Choose Your Plan</span>
+            </h3>
+
+            {/* Monthly / Annual Switcher */}
+            <div className="flex items-center bg-surface-hover p-0.5 rounded-xl border border-border">
+              <button
+                type="button"
+                onClick={() => setBillingInterval('monthly')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                  billingInterval === 'monthly'
+                    ? 'bg-primary text-white shadow-xs'
+                    : 'text-text-muted hover:text-text-primary'
+                }`}
+              >
+                Monthly
+              </button>
+              <button
+                type="button"
+                onClick={() => setBillingInterval('annual')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
+                  billingInterval === 'annual'
+                    ? 'bg-primary text-white shadow-xs'
+                    : 'text-text-muted hover:text-text-primary'
+                }`}
+              >
+                <span>Annual</span>
+                <span className={`text-[10px] font-black px-1 py-0.2 rounded ${
+                  billingInterval === 'annual' ? 'bg-white/20 text-white' : 'text-emerald-500 bg-emerald-500/10'
+                }`}>
+                  Save ~17%
+                </span>
+              </button>
+            </div>
+          </div>
 
           {Object.values(SUBSCRIPTION_PLANS).map((plan) => {
             const isCurrent = normalizePlan(sub.plan) === normalizePlan(plan.id);
-            const price = plan.prices[currency];
+            const price = (plan.prices[billingInterval] && plan.prices[billingInterval][currency]) !== undefined
+              ? plan.prices[billingInterval][currency]
+              : plan.prices[currency];
             const priceStr = subscriptionService.formatPrice(price, currency);
 
             return (
@@ -311,7 +438,14 @@ export default function Membership() {
                 <div className="my-3">
                   <span className="text-2xl font-black text-text-primary">{priceStr}</span>
                   {plan.id !== 'free' && (
-                    <span className="text-xs text-text-muted font-medium ml-1">/ month</span>
+                    <span className="text-xs text-text-muted font-medium ml-1">
+                      / {billingInterval === 'annual' ? 'year' : 'month'}
+                    </span>
+                  )}
+                  {billingInterval === 'annual' && plan.id !== 'free' && (
+                    <span className="block text-[11px] font-bold text-emerald-500 mt-0.5">
+                      → Save ~17% compared to monthly
+                    </span>
                   )}
                 </div>
 
@@ -326,23 +460,78 @@ export default function Membership() {
                 </ul>
 
                 {/* Action Button */}
-                <Button
-                  variant={isCurrent ? 'outline' : plan.id === 'pro' ? 'primary' : 'secondary'}
-                  fullWidth
-                  disabled={isCurrent}
-                  onClick={() => handleSelectPlan(plan.id.toUpperCase())}
-                  size="sm"
-                >
-                  {isCurrent ? (
-                    <span className="flex items-center justify-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold">
-                      <CheckCircle2 size={14} /> Current Plan
-                    </span>
-                  ) : plan.id === 'free' ? (
-                    'Downgrade to Free'
-                  ) : (
-                    'Upgrade to ' + plan.name
-                  )}
-                </Button>
+                {(() => {
+                  const isDowngradeScheduledForFree = sub.cancelAtPeriodEnd && (sub.scheduledPlan === 'free' || !sub.scheduledPlan);
+
+                  if (isCurrent) {
+                    if (sub.cancelAtPeriodEnd) {
+                      return (
+                        <div className="space-y-1.5">
+                          <Button
+                            variant="primary"
+                            fullWidth
+                            size="sm"
+                            onClick={handleCancelDowngrade}
+                          >
+                            Keep {plan.name} (Cancel Downgrade)
+                          </Button>
+                          <span className="block text-center text-[10px] text-amber-500 font-semibold">
+                            Active until {sub.endDate ? new Date(sub.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'period end'}
+                          </span>
+                        </div>
+                      );
+                    }
+                    return (
+                      <Button
+                        variant="outline"
+                        fullWidth
+                        disabled
+                        size="sm"
+                      >
+                        <span className="flex items-center justify-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold">
+                          <CheckCircle2 size={14} /> Current Plan
+                        </span>
+                      </Button>
+                    );
+                  }
+
+                  if (plan.id === 'free') {
+                    if (isDowngradeScheduledForFree) {
+                      return (
+                        <Button
+                          variant="outline"
+                          fullWidth
+                          disabled
+                          size="sm"
+                          className="border-amber-500/40 text-amber-500 bg-amber-500/5 cursor-not-allowed opacity-90 font-bold"
+                        >
+                          Downgrade Scheduled
+                        </Button>
+                      );
+                    }
+                    return (
+                      <Button
+                        variant="secondary"
+                        fullWidth
+                        onClick={() => handleSelectPlan('FREE')}
+                        size="sm"
+                      >
+                        Downgrade to Free
+                      </Button>
+                    );
+                  }
+
+                  return (
+                    <Button
+                      variant={plan.id === 'pro' ? 'primary' : 'secondary'}
+                      fullWidth
+                      onClick={() => handleSelectPlan(plan.id.toUpperCase())}
+                      size="sm"
+                    >
+                      Upgrade to {plan.name}
+                    </Button>
+                  );
+                })()}
               </Card>
             );
           })}

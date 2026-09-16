@@ -56,6 +56,7 @@ class JsonDatabase {
   }
 
   insert(record) {
+    this.load();
     const existingIndex = this.data.findIndex((item) => item.id === record.id);
     if (existingIndex !== -1) {
       this.data[existingIndex] = { ...this.data[existingIndex], ...record, updatedAt: new Date().toISOString() };
@@ -67,6 +68,7 @@ class JsonDatabase {
   }
 
   update(id, updates) {
+    this.load();
     const idx = this.data.findIndex((item) => item.id === id);
     if (idx !== -1) {
       this.data[idx] = { ...this.data[idx], ...updates, updatedAt: new Date().toISOString() };
@@ -77,6 +79,7 @@ class JsonDatabase {
   }
 
   delete(id) {
+    this.load();
     const prevLen = this.data.length;
     this.data = this.data.filter((item) => item.id !== id);
     if (this.data.length !== prevLen) {
@@ -87,6 +90,7 @@ class JsonDatabase {
   }
 
   count(predicate = null) {
+    this.load();
     if (!predicate) return this.data.length;
     return this.data.filter(predicate).length;
   }
@@ -106,8 +110,10 @@ export const db = {
   sourceHealth: new JsonDatabase(path.join(DATA_DIR, 'source_health.json')),
   subscriptions: new JsonDatabase(path.join(DATA_DIR, 'subscriptions.json')),
   dailyUsage: new JsonDatabase(path.join(DATA_DIR, 'daily_usage.json')),
+  quotas: new JsonDatabase(path.join(DATA_DIR, 'quotas.json')),
   rewards: new JsonDatabase(path.join(DATA_DIR, 'rewards.json')),
   referrals: new JsonDatabase(path.join(DATA_DIR, 'referrals.json')),
+  transactions: new JsonDatabase(path.join(DATA_DIR, 'transactions.json')),
 
   flushAll() {
     Object.values(this).forEach((val) => {
@@ -139,8 +145,10 @@ export const db = {
       sourceHealth: this.sourceHealth.findAll(),
       subscriptions: this.subscriptions.findAll(),
       dailyUsage: this.dailyUsage.findAll(),
+      quotas: this.quotas.findAll(),
       rewards: this.rewards.findAll(),
       referrals: this.referrals.findAll(),
+      transactions: this.transactions.findAll(),
     };
     fs.writeFileSync(backupFile, JSON.stringify(dump, null, 2), 'utf-8');
     return backupFile;

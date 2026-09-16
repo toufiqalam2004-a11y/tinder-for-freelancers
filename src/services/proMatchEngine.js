@@ -345,7 +345,8 @@ export function detectRiskSignals(job = {}) {
  * Calculates user Profile Strength (0 - 100%) and actionable improvement checklist.
  */
 export function calculateProfileStrength(profile = {}) {
-  let score = 0;
+  const BASELINE_SCORE = 20;
+  let score = BASELINE_SCORE;
   const tips = [];
 
   if (profile.name?.trim()) score += 10;
@@ -358,22 +359,22 @@ export function calculateProfileStrength(profile = {}) {
   else tips.push({ id: 'spec', label: 'Add specific niche or specialization', pts: 10 });
 
   const skills = profile.skills || [];
-  if (skills.length >= 5) score += 20;
+  if (skills.length >= 5) score += 15;
   else if (skills.length >= 1) {
     score += 10;
-    tips.push({ id: 'skills', label: 'Add at least 5 skills for better matching', pts: 10 });
+    tips.push({ id: 'skills', label: 'Add at least 5 skills for better matching', pts: 5 });
   } else {
-    tips.push({ id: 'skills', label: 'Add your technical & creative skills', pts: 20 });
+    tips.push({ id: 'skills', label: 'Add your technical & creative skills', pts: 15 });
   }
 
   if (profile.portfolioUrl || (profile.portfolioLinks && profile.portfolioLinks.length > 0)) {
-    score += 15;
+    score += 10;
   } else {
-    tips.push({ id: 'portfolio', label: 'Add portfolio link to showcase work', pts: 15 });
+    tips.push({ id: 'portfolio', label: 'Add portfolio link to showcase work', pts: 10 });
   }
 
-  if (profile.cvUrl) score += 15;
-  else tips.push({ id: 'cv', label: 'Upload your CV / Resume', pts: 15 });
+  if (profile.cvUrl) score += 10;
+  else tips.push({ id: 'cv', label: 'Upload your CV / Resume', pts: 10 });
 
   if (profile.bio?.trim() && profile.bio.length > 30) score += 10;
   else tips.push({ id: 'bio', label: 'Write a short professional bio', pts: 10 });

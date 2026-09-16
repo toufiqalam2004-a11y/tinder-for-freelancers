@@ -546,6 +546,12 @@ async function runTests() {
       otpRes.ok && otpData.success && verifyRes.ok && verifyData.success && !!verifyData.token,
       'Phone auth: OTP generation & verification succeeds with session token issued'
     );
+    if (verifyData?.user?.id) {
+      db.users.delete(verifyData.user.id);
+      db.subscriptions.delete(`sub-${verifyData.user.id}`);
+      db.quotas.delete(`quota-${verifyData.user.id}`);
+      db.rewards.delete(`reward-${verifyData.user.id}`);
+    }
   } catch (e) {
     assert(false, `OTP generation and verification test error: ${e.message}`);
   }
@@ -1442,14 +1448,14 @@ async function runTests() {
     });
     const data = await res.json().catch(() => ({}));
     assert(
-      res.status === 403 && data.code === 'UPGRADE_REQUIRED' && data.error.includes('Plus & Pro'),
+      res.status === 403 && data.code === 'UPGRADE_REQUIRED' && data.error.includes('Pro feature'),
       'Autopilot Test 1: FREE user strictly blocked from /api/autopilot/run-cycle with 403 UPGRADE_REQUIRED'
     );
   } catch (e) {
     assert(false, `Autopilot Test 1 failed: ${e.message}`);
   }
 
-  // TEST 62: Autopilot Backend: PLUS user authorized on /api/autopilot/run-cycle within Plus daily limits (20/day)
+  // TEST 62: Autopilot Backend: PLUS user ALSO blocked from /api/autopilot/run-cycle (AUTOPILOT = PRO ONLY)
   try {
     const res = await fetch(`${API_BASE}/autopilot/run-cycle`, {
       method: 'POST',
@@ -1458,8 +1464,8 @@ async function runTests() {
     });
     const data = await res.json().catch(() => ({}));
     assert(
-      res.status === 200 && data.success === true && data.tier === 'plus' && data.dailyLimit === 20 && data.requiresApproval === true,
-      'Autopilot Test 2: PLUS user authorized on /api/autopilot/run-cycle with limited tier & 20 dailyLimit'
+      res.status === 403 && data.code === 'UPGRADE_REQUIRED' && data.error.includes('Pro feature'),
+      'Autopilot Test 2: PLUS user strictly blocked from /api/autopilot/run-cycle with 403 UPGRADE_REQUIRED'
     );
   } catch (e) {
     assert(false, `Autopilot Test 2 failed: ${e.message}`);
@@ -1500,7 +1506,7 @@ async function runTests() {
 
     assert(
       dataFree.canUseAutopilot === false &&
-      dataPlus.canUseAutopilot === true && dataPlus.badge.includes('PLUS • LIMITED') &&
+      dataPlus.canUseAutopilot === false && dataPlus.badge.includes('PRO FEATURE') &&
       dataPro.canUseAutopilot === true && dataPro.badge.includes('PRO • FULL ACCESS'),
       'Autopilot Test 4: /api/autopilot/status returns correct plan hierarchy, badges, and permissions'
     );
@@ -1531,7 +1537,7 @@ async function runTests() {
   {
     const freeCheck = subscriptionService.canUseAutopilot();
     assert(
-      freeCheck.allowed === false && freeCheck.requiredPlan === 'plus',
+      freeCheck.allowed === false && freeCheck.requiredPlan === 'pro',
       'Autopilot Test 6: subscriptionService.canUseAutopilot() locks Free tier with upgrade requirement'
     );
   }
@@ -1724,6 +1730,7 @@ async function runTests() {
 
   // TEST 84: Non-photo profile data remains permanently intact in storage
   {
+    setAuth({ isAuthenticated: true, userId: userA, phone: '+919999990001' });
     const profileData = {
       id: userA,
       name: 'Test Freelancer',

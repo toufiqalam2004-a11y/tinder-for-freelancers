@@ -6,6 +6,7 @@
  */
 
 import { getAuth } from '../../data/storage.js';
+import { getApiUrl } from '../../config/apiConfig.js';
 
 let cachedEmailStatus = false;
 
@@ -23,7 +24,7 @@ export class EmailOutreachAdapter {
    */
   async checkConfiguration() {
     try {
-      const res = await fetch('/api/outreach/status');
+      const res = await fetch(getApiUrl('/outreach/status'));
       if (res.ok) {
         const data = await res.json();
         cachedEmailStatus = !!data.emailConfigured;
@@ -70,7 +71,7 @@ export class EmailOutreachAdapter {
     if (auth.phone || auth.userId) headers['x-user-id'] = auth.phone || auth.userId;
 
     try {
-      const res = await fetch('/api/outreach/email', {
+      const res = await fetch(getApiUrl('/outreach/email'), {
         method: 'POST',
         headers,
         body: JSON.stringify({

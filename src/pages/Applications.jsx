@@ -43,46 +43,91 @@ import toast from 'react-hot-toast';
 
 const TABS = [
   { id: 'all', label: 'All' },
-  { id: 'saved', label: 'Saved' },
-  { id: 'draft', label: 'Drafts' },
   { id: 'applied', label: 'Applied' },
+  { id: 'saved', label: 'Saved' },
   { id: 'viewed', label: 'Viewed' },
-  { id: 'replied', label: 'Replied' },
-  { id: 'interview', label: 'Interview' },
-  { id: 'negotiation', label: 'Negotiation' },
-  { id: 'hired', label: 'Hired' },
-  { id: 'closed', label: 'Closed' },
 ];
 
 const Applications = () => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('all');
-  const [applications, setApplications] = useState(() => getApplications());
-  const [analytics, setAnalytics] = useState(() => getApplicationAnalytics());
-  const [funnel, setFunnel] = useState(() => getFunnelAnalytics());
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [applications, setApplications] = useState(() => {
+    try {
+      return getApplications() || [];
+    } catch {
+      return [];
+    }
+  });
+  const [analytics, setAnalytics] = useState(() => {
+    try {
+      return getApplicationAnalytics() || {};
+    } catch {
+      return {};
+    }
+  });
+  const [funnel, setFunnel] = useState(() => {
+    try {
+      return getFunnelAnalytics() || { rates: {} };
+    } catch {
+      return { rates: {} };
+    }
+  });
   const [showFunnelDetail, setShowFunnelDetail] = useState(true);
   const [selectedAppForStatus, setSelectedAppForStatus] = useState(null);
 
   // Application auto-delete preferences state
-  const [autoDeleteEnabled, setAutoDeleteEnabled] = useState(() => getAutoDeletePreference());
+  const [autoDeleteEnabled, setAutoDeleteEnabled] = useState(() => {
+    try {
+      return Boolean(getAutoDeletePreference());
+    } catch {
+      return false;
+    }
+  });
   const [showPreferencesSection, setShowPreferencesSection] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   const refreshApplications = (silent = false) => {
-    // If auto-delete is enabled, sweep old applications first
-    if (getAutoDeletePreference()) {
-      const cleanupRes = cleanupOldApplications();
-      if (cleanupRes.deletedCount > 0 && !silent) {
-        toast('Some old applications were automatically removed.', { icon: '🧹' });
+    try {
+      setLoadError(null);
+      // If auto-delete is enabled, sweep old applications first
+      if (getAutoDeletePreference()) {
+        try {
+          const cleanupRes = cleanupOldApplications();
+          if (cleanupRes && cleanupRes.deletedCount > 0 && !silent) {
+            toast('Some old applications were automatically removed.', { icon: '🧹' });
+          }
+        } catch (cleanupErr) {
+          console.warn('[Applications] Auto-delete sweep warning:', cleanupErr);
+        }
       }
+      setApplications(getApplications() || []);
+      setAnalytics(getApplicationAnalytics() || {});
+      setFunnel(getFunnelAnalytics() || { rates: {} });
+    } catch (err) {
+      console.error('[Applications] Error loading applications:', err);
+      setLoadError(err?.message || 'Failed to load applications');
     }
-    setApplications(getApplications());
-    setAnalytics(getApplicationAnalytics());
-    setFunnel(getFunnelAnalytics());
   };
 
   useEffect(() => {
     refreshApplications(false);
+
+    const handleDataChange = () => {
+      refreshApplications(true);
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('tf_applications_changed', handleDataChange);
+      window.addEventListener('tf_job_state_changed', handleDataChange);
+      window.addEventListener('storage', handleDataChange);
+      return () => {
+        window.removeEventListener('tf_applications_changed', handleDataChange);
+        window.removeEventListener('tf_job_state_changed', handleDataChange);
+        window.removeEventListener('storage', handleDataChange);
+      };
+    }
   }, []);
 
   const handleToggleAutoDelete = (nextValue) => {
@@ -92,14 +137,22 @@ const Applications = () => {
       // Show required user confirmation modal before enabling
       setShowConfirmModal(true);
     } else {
-      setAutoDeletePreference(false);
+      try {
+        setAutoDeletePreference(false);
+      } catch (err) {
+        console.warn('Could not set auto-delete pref:', err);
+      }
       setAutoDeleteEnabled(false);
       toast.success('Auto-delete applications disabled.');
     }
   };
 
   const confirmEnableAutoDelete = () => {
-    setAutoDeletePreference(true);
+    try {
+      setAutoDeletePreference(true);
+    } catch (err) {
+      console.warn('Could not set auto-delete pref:', err);
+    }
     setAutoDeleteEnabled(true);
     setShowConfirmModal(false);
 
@@ -110,22 +163,51 @@ const Applications = () => {
     }
 
     // Trigger cleanup immediately
-    const res = cleanupOldApplications(true);
-    if (res.deletedCount > 0) {
-      toast('Some old applications were automatically removed.', { icon: '🧹' });
+    try {
+      const res = cleanupOldApplications(true);
+      if (res && res.deletedCount > 0) {
+        toast('Some old applications were automatically removed.', { icon: '🧹' });
+      }
+    } catch (err) {
+      console.warn('Cleanup error:', err);
     }
     refreshApplications(true);
   };
 
   const handleStatusUpdate = (appId, newStatus, note) => {
-    updateApplication(appId, { status: newStatus, statusNote: note });
-    toast.success(`Status updated to ${newStatus}`);
-    refreshApplications();
+    try {
+      updateApplication(appId, { status: newStatus, statusNote: note });
+      toast.success(`Status updated to ${newStatus}`);
+      refreshApplications();
+    } catch (err) {
+      toast.error('Failed to update status');
+    }
+  };
+
+  const formatAppliedDate = (dateVal, status) => {
+    if ((status || '').toLowerCase() === 'saved') return 'Saved';
+    if (!dateVal || (status || '').toLowerCase() === 'draft') return 'Draft (Unsent)';
+    try {
+      const d = new Date(dateVal);
+      if (isNaN(d.getTime())) return 'Draft (Unsent)';
+      return `Applied ${d.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+      })}`;
+    } catch {
+      return 'Draft (Unsent)';
+    }
   };
 
   const currentUid = getCurrentUserId();
-  const filteredApps = applications.filter((app) => {
-    if (app.userId && app.userId !== currentUid && app.userId !== 'user-default') return false;
+  const safeApps = Array.isArray(applications) ? applications : [];
+  const filteredApps = safeApps.filter((app) => {
+    if (!app) return false;
+    if (currentUid !== 'user-default') {
+      if (app.userId !== currentUid) return false;
+    } else {
+      if (app.userId && app.userId !== 'user-default') return false;
+    }
     if (activeTab === 'all') return true;
     return (app.status || 'applied').toLowerCase() === activeTab.toLowerCase();
   });
@@ -142,24 +224,6 @@ const Applications = () => {
 
           <div className="flex items-center gap-1.5">
             <button
-              type="button"
-              onClick={() => setShowPreferencesSection(!showPreferencesSection)}
-              className={`text-xs px-2.5 py-1.5 rounded-xl border flex items-center gap-1.5 font-semibold transition-all ${
-                showPreferencesSection || autoDeleteEnabled
-                  ? 'border-primary bg-primary/10 text-primary shadow-xs'
-                  : 'border-border bg-surface text-text-secondary hover:bg-surface-hover hover:text-text-primary'
-              }`}
-              title="Application Preferences & Auto-delete"
-              aria-label="Application Settings"
-            >
-              <Sliders size={13} />
-              <span>Settings</span>
-              {autoDeleteEnabled && (
-                <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-              )}
-            </button>
-
-            <button
               onClick={() => navigate('/jobs')}
               className="text-xs px-3 py-1.5 rounded-xl border border-primary/30 bg-primary/10 text-primary font-semibold hover:bg-primary/20 transition-colors"
             >
@@ -168,210 +232,90 @@ const Applications = () => {
           </div>
         </div>
 
-        {/* APPLICATION PREFERENCES */}
-        {showPreferencesSection && (
-          <Card className="mt-4 p-4 bg-surface border border-border shadow-card">
-            <div className="flex items-center justify-between mb-3 pb-2 border-b border-border/70">
-              <span className="text-xs font-bold uppercase tracking-wider text-text-secondary flex items-center gap-1.5">
-                <Sliders size={14} className="text-primary" /> Application Preferences
-              </span>
-              <button
-                type="button"
-                onClick={() => setShowPreferencesSection(false)}
-                className="text-[11px] text-text-muted hover:text-text-primary transition-colors"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="p-3.5 rounded-2xl bg-surface-hover/70 border border-border space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="space-y-1">
-                  <div className="text-xs font-bold text-text-primary flex items-center gap-1.5">
-                    <Trash2 size={13} className="text-primary" />
-                    <span>Auto-delete applications</span>
-                  </div>
-                  <p className="text-[11px] text-text-secondary leading-relaxed">
-                    Automatically remove applications that haven't been updated for 7 days.
-                  </p>
-                  <div className="text-[10px] text-text-muted mt-1">
-                    Status:{' '}
-                    <strong className={autoDeleteEnabled ? 'text-primary font-bold' : 'text-text-secondary'}>
-                      {autoDeleteEnabled ? 'ON — Deletes old applications after 7 days.' : 'OFF'}
-                    </strong>
-                  </div>
-                </div>
-
-                {/* Clear ON / OFF Toggle Buttons */}
-                <div
-                  role="radiogroup"
-                  aria-label="Auto-delete applications after 7 days"
-                  className="flex items-center bg-surface border border-border rounded-xl p-0.5 flex-shrink-0"
-                >
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={!autoDeleteEnabled}
-                    onClick={() => handleToggleAutoDelete(false)}
-                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                      !autoDeleteEnabled
-                        ? 'bg-text-secondary text-white shadow-xs'
-                        : 'text-text-muted hover:text-text-primary'
-                    }`}
-                  >
-                    OFF
-                  </button>
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={autoDeleteEnabled}
-                    onClick={() => handleToggleAutoDelete(true)}
-                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                      autoDeleteEnabled
-                        ? 'bg-primary text-white shadow-xs'
-                        : 'text-text-muted hover:text-text-primary'
-                    }`}
-                  >
-                    ON
-                  </button>
-                </div>
-              </div>
-
-              {/* Protection Guarantee Info */}
-              <div className="pt-2.5 border-t border-border/80 flex items-start gap-2 text-[10px] text-text-muted leading-relaxed">
-                <ShieldCheck size={14} className="text-emerald-500 flex-shrink-0 mt-0.5" />
-                <span>
-                  <strong>Protected from deletion:</strong> Applications with active statuses (<em>Interview</em>, <em>Shortlisted</em>, <em>Negotiation</em>, <em>Hired</em>) are permanently retained and never deleted.
-                </span>
-              </div>
-            </div>
-          </Card>
-        )}
-
-        {/* Section 0: Today's Quota & Credit Status */}
+        {/* Section 0: Quota & Available Applications Status */}
         {(() => {
-          const plan = subscriptionService.getCurrentPlanDetails();
-          const usage = usageService.getTodayUsage();
-          const credits = usageService.getCreditsSummary();
-          const dailyLimit = plan.limits.applicationsPerDay;
-          const usedToday = usage.applicationsUsed || 0;
-          const remainingDaily = Math.max(0, dailyLimit - usedToday);
-          const pct = Math.min(100, Math.round((usedToday / dailyLimit) * 100));
+          try {
+            const plan = subscriptionService?.getCurrentPlanDetails?.() || { name: 'Free', id: 'free' };
+            const quotaStatus = usageService?.getQuotaStatus?.() || {
+              limit: 5,
+              used: 0,
+              remainingQuota: 5,
+              refillFormatted: '8h 00m',
+              bonusTokens: 0,
+              availableApplications: 5,
+              isExhausted: false,
+            };
+            const limit = Number(quotaStatus?.limit) || 5;
+            const used = Number(quotaStatus?.used) || 0;
+            const remainingQuota = quotaStatus?.remainingQuota !== undefined ? Number(quotaStatus.remainingQuota) : 0;
+            const refillFormatted = quotaStatus?.refillFormatted || '8h 00m';
+            const bonusTokens = Number(quotaStatus?.bonusTokens) || 0;
+            const isExhausted = Boolean(quotaStatus?.isExhausted);
+            const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+            const availableTotal = quotaStatus?.availableApplications !== undefined ? quotaStatus.availableApplications : (remainingQuota + bonusTokens);
 
-          return (
-            <Card className="mt-4 p-3.5 bg-surface border border-border shadow-xs space-y-2.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center font-bold">
-                    <Crown size={15} />
+            return (
+              <Card className="mt-4 p-3.5 bg-surface border border-border shadow-xs space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center font-bold">
+                      <Crown size={15} />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-text-primary">
+                        {plan?.name || 'Free'} Plan Quota
+                      </span>
+                      <span className="text-[10px] text-text-muted block">
+                        Applications: <strong className="text-text-primary font-bold">{used} / {limit}</strong> • Refreshes in: <strong className="text-primary">{refillFormatted}</strong>
+                      </span>
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-xs font-bold text-text-primary">
-                      {plan.name} Plan Quota
-                    </span>
-                    <span className="text-[10px] text-text-muted block">
-                      {usedToday} / {dailyLimit} applications used today
-                    </span>
-                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => navigate('/membership')}
+                    className="text-xs font-bold text-primary hover:underline flex items-center gap-0.5"
+                  >
+                    <span>{isExhausted ? 'Upgrade / Top-Up' : 'Manage'}</span>
+                    <ChevronRight size={13} />
+                  </button>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => navigate('/membership')}
-                  className="text-xs font-bold text-primary hover:underline flex items-center gap-0.5"
-                >
-                  <span>{remainingDaily === 0 ? 'Upgrade / Top-Up' : 'Manage'}</span>
-                  <ChevronRight size={13} />
-                </button>
-              </div>
+                {/* Mini progress bar */}
+                <div className="w-full bg-surface-hover h-1.5 rounded-full overflow-hidden">
+                  <div
+                    className="h-full gradient-primary rounded-full transition-all duration-300"
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
 
-              {/* Mini progress bar */}
-              <div className="w-full bg-surface-hover h-1.5 rounded-full overflow-hidden">
-                <div
-                  className="h-full gradient-primary rounded-full transition-all duration-300"
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
+                {isExhausted && (
+                  <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 dark:text-amber-400 flex items-center justify-between font-medium">
+                    <span className="font-bold">Application quota exhausted</span>
+                    <span>Next refill in {refillFormatted}</span>
+                  </div>
+                )}
 
-              <div className="flex items-center justify-between text-[11px] text-text-muted pt-0.5">
-                <span>
-                  Remaining today: <strong className="text-primary font-bold">{remainingDaily}</strong>
-                </span>
-                <span>
-                  Extra credits: <strong className="text-amber-500 font-bold">{credits.activeCredits}</strong>
-                </span>
-              </div>
-            </Card>
-          );
+                <div className="flex items-center justify-between text-[11px] text-text-muted pt-0.5">
+                  <span>
+                    Remaining quota: <strong className="text-primary font-bold">{remainingQuota}</strong>
+                  </span>
+                  <span>
+                    {bonusTokens > 0 ? (
+                      <span className="text-amber-500 font-bold">Bonus Tokens: +{bonusTokens}</span>
+                    ) : (
+                      <span>Available total: <strong className="text-text-primary font-bold">{availableTotal}</strong></span>
+                    )}
+                  </span>
+                </div>
+              </Card>
+            );
+          } catch (quotaErr) {
+            console.warn('[Applications] Quota status fallback:', quotaErr);
+            return null;
+          }
         })()}
 
-        {/* Section 1: Visual Conversion Funnel (V4) */}
-        <Card className="mt-4 p-4 border-primary/25 bg-surface">
-          <div className="flex items-center justify-between mb-2.5">
-            <span className="text-xs font-bold uppercase tracking-wider text-text-secondary flex items-center gap-1.5">
-              <TrendingUp size={14} className="text-primary" /> Application Pipeline Funnel
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowFunnelDetail(!showFunnelDetail)}
-              className="text-[11px] text-primary font-semibold hover:underline"
-            >
-              {showFunnelDetail ? 'Compact' : 'Expanded'}
-            </button>
-          </div>
-
-          {/* Funnel Stages Horizontal Progression */}
-          <div className="grid grid-cols-5 gap-1.5 text-center">
-            {[
-              { label: 'Discovered', count: funnel.discoveredCount, color: 'text-text-secondary' },
-              { label: 'Saved', count: funnel.savedCount, color: 'text-amber-500' },
-              { label: 'Applied', count: funnel.appliedCount, color: 'text-blue-500' },
-              { label: 'Responses', count: funnel.respondedCount, color: 'text-indigo-500' },
-              { label: 'Interviews', count: funnel.interviewCount, color: 'text-emerald-500' },
-            ].map((stage, idx) => (
-              <div key={stage.label} className="p-2 rounded-xl bg-surface-hover border border-border">
-                <span className="text-[10px] text-text-muted uppercase block truncate">{stage.label}</span>
-                <span className={`text-base font-extrabold block mt-0.5 ${stage.color}`}>
-                  {stage.count}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* Rates Breakdown */}
-          {showFunnelDetail && (
-            <div className="mt-3 pt-3 border-t border-border grid grid-cols-3 gap-2 text-center text-xs">
-              <div>
-                <span className="text-[10px] text-text-muted block">Application Rate</span>
-                <span className="font-bold text-text-primary mt-0.5 block">
-                  {funnel.rates.applicationRate}%
-                </span>
-              </div>
-              <div>
-                <span className="text-[10px] text-text-muted block">Response Rate</span>
-                <span className="font-bold text-primary mt-0.5 block">
-                  {funnel.rates.responseRate}%
-                </span>
-              </div>
-              <div>
-                <span className="text-[10px] text-text-muted block">Interview Rate</span>
-                <span className="font-bold text-emerald-500 mt-0.5 block">
-                  {funnel.rates.interviewRate}%
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* AI Performance Insight Pill */}
-          <div className="mt-3 p-2.5 rounded-xl bg-primary/10 border border-primary/20 flex items-start gap-2 text-xs">
-            <Sparkles size={14} className="text-primary flex-shrink-0 mt-0.5" />
-            <p className="text-text-secondary leading-snug text-[11px]">
-              {funnel.appliedCount >= 3
-                ? `You have a ${funnel.rates.responseRate}% client response rate. Applications with portfolio links receive 2.4x more interview invitations.`
-                : 'Send at least 3 personalized AI applications to unlock data-backed response trend insights.'}
-            </p>
-          </div>
-        </Card>
 
 
         {/* Section 2: Tab Bar */}
@@ -396,13 +340,26 @@ const Applications = () => {
 
         {/* Section 3: Applications List */}
         <div className="mt-4 flex-1">
-          {filteredApps.length === 0 ? (
+          {loadError ? (
+            <Card className="p-6 text-center border-rose-500/30 bg-rose-500/5 space-y-3">
+              <AlertTriangle className="w-10 h-10 text-rose-500 mx-auto" />
+              <h3 className="text-sm font-bold text-text-primary">Unable to load applications</h3>
+              <p className="text-xs text-text-secondary">{loadError}</p>
+              <Button variant="secondary" size="sm" onClick={() => refreshApplications(false)}>
+                Retry
+              </Button>
+            </Card>
+          ) : loading ? (
+            <div className="flex-1 flex items-center justify-center py-20">
+              <div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" />
+            </div>
+          ) : filteredApps.length === 0 ? (
             <EmptyState
               icon={FileText}
               title={activeTab === 'all' ? 'No applications yet' : `No ${activeTab} applications`}
               subtitle={
                 activeTab === 'all'
-                  ? 'Use AI Apply on any job in your feed to craft personalized proposals.'
+                  ? 'Your applied jobs will appear here. Use AI Apply on any job in your feed to craft personalized proposals.'
                   : `No applications found with status "${activeTab}".`
               }
               action={activeTab === 'all' ? { label: 'Explore Job Feed', onClick: () => navigate('/jobs') } : undefined}
@@ -410,10 +367,12 @@ const Applications = () => {
           ) : (
             <div className="space-y-3">
               {filteredApps.map((app) => {
+                if (!app || !app.id) return null;
                 const statusMeta = APPLICATION_STATUS_CONFIG[app.status?.toLowerCase()] || {
                   label: app.status || 'Applied',
                   color: 'text-text-primary',
                   bg: 'bg-surface-hover',
+                  border: 'border-border',
                 };
 
                 return (
@@ -425,13 +384,13 @@ const Applications = () => {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <h3 className="text-sm font-bold text-text-primary leading-snug truncate">
-                          {app.title || app.jobTitle}
+                          {app.title || app.jobTitle || 'Untitled Opportunity'}
                         </h3>
                         <div className="flex items-center gap-1.5 text-xs text-text-secondary mt-1">
                           <Building2 size={13} className="text-text-muted flex-shrink-0" />
-                          <span className="truncate">{app.company}</span>
+                          <span className="truncate">{app.company || 'Direct Client'}</span>
                           <span className="text-text-muted">•</span>
-                          <span className="capitalize text-primary">{app.platform?.replace('_', ' ')}</span>
+                          <span className="capitalize text-primary">{(app.platform || 'manual').replace('_', ' ')}</span>
                         </div>
                       </div>
 
@@ -445,7 +404,7 @@ const Applications = () => {
                         title="Update status"
                       >
                         <span
-                          className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${statusMeta.color} ${statusMeta.bg} ${statusMeta.border}`}
+                          className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${statusMeta.color || ''} ${statusMeta.bg || ''} ${statusMeta.border || 'border-border'}`}
                         >
                           {statusMeta.label}
                         </span>
@@ -463,12 +422,7 @@ const Applications = () => {
                     <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-border text-[11px] text-text-muted">
                       <span className="flex items-center gap-1">
                         <Calendar size={12} />
-                        {app.appliedAt
-                          ? `Applied ${new Date(app.appliedAt).toLocaleDateString('en-US', {
-                              month: 'short',
-                              day: 'numeric',
-                            })}`
-                          : 'Draft (Unsent)'}
+                        {formatAppliedDate(app.appliedAt, app.status)}
                       </span>
 
                       <div className="flex items-center gap-2">

@@ -117,7 +117,11 @@ export function detectRoleAndCategory(text = '', userProfile = null) {
   let jobRole = 'Video Editor';
   let jobCategory = userProfile?.category || 'Creative';
 
-  if (lower.includes('short-form') || lower.includes('shorts') || lower.includes('reels') || lower.includes('tiktok')) {
+  if (lower.includes('ai video') || lower.includes('midjourney') || lower.includes('runway') || lower.includes('pika')) {
+    title = 'AI Video Editor & Specialist';
+    jobRole = 'AI Video Editor';
+    jobCategory = 'AI';
+  } else if (lower.includes('short-form') || lower.includes('shorts') || lower.includes('reels') || lower.includes('tiktok')) {
     title = 'Short-Form Video Editor';
     jobRole = 'Short-Form Video Editor';
     jobCategory = 'Creative';
@@ -133,10 +137,6 @@ export function detectRoleAndCategory(text = '', userProfile = null) {
     title = 'YouTube Thumbnail & Graphic Designer';
     jobRole = 'Thumbnail Designer';
     jobCategory = 'Design';
-  } else if (lower.includes('ai video') || lower.includes('midjourney') || lower.includes('runway')) {
-    title = 'AI Video Editor & Specialist';
-    jobRole = 'AI Video Editor';
-    jobCategory = 'AI';
   } else if (lower.includes('content creator') || lower.includes('producer')) {
     title = 'Content Creator & Producer';
     jobRole = 'Content Creator';
@@ -215,8 +215,15 @@ export function extractJobAttributes(postText = '', platform = 'facebook_group',
     'react',
     'javascript',
     'ai video',
+    'video editing',
+    'editing',
+    'vlogs',
+    'reels',
   ];
-  const requiredSkills = skillKeywords.filter((sk) => lower.includes(sk));
+  let requiredSkills = skillKeywords.filter((sk) => lower.includes(sk));
+  if (requiredSkills.length === 0) {
+    requiredSkills = ['Video Editing', 'Content Creation'];
+  }
 
   return {
     title,
@@ -446,5 +453,12 @@ export const DEMO_SAMPLE_POSTS = [
     platform: 'x',
     postUrl: 'https://x.com/viralgrowthagency/status/open_role_editor',
     text: 'We are hiring a freelance Video Editor for 3 creator clients! $50/short. 100% remote. DM me on Twitter/X with your best reel to apply.',
+  },
+  {
+    id: 'sample-reddit-3',
+    author: 'u/GenerativeMediaStudio',
+    platform: 'reddit',
+    postUrl: 'https://reddit.com/r/forhire/comments/hiring_ai_video_editor',
+    text: '🚀 [Hiring] AI Video Editor & Specialist. Seeking an editor experienced with Runway Gen-2, Midjourney, Pika, and Premiere Pro to craft futuristic AI video commercials and social shorts. $60/hr or $3,500/month. 100% Remote. Email your AI video portfolio to contact@genmediastudio.ai.',
   },
 ];

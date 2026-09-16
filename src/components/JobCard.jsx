@@ -26,6 +26,7 @@ import Card from './Card';
 import Button from './Button';
 import Modal from './Modal';
 import { extractContactInfo } from '../utils/contactExtractor.js';
+import { getUserJobState, isJobAppliedByUser } from '../data/storage.js';
 
 
 export default function JobCard({
@@ -42,9 +43,10 @@ export default function JobCard({
   const navigate = useNavigate();
   const [showWhy, setShowWhy] = useState(false);
 
-  const isSaved = job.status === 'saved';
-  const isApplied = job.status === 'applied';
-  const isSkipped = job.status === 'skipped';
+  const userState = getUserJobState(job.id);
+  const isSaved = job.status === 'saved' || userState === 'saved';
+  const isApplied = job.status === 'applied' || userState === 'applied' || isJobAppliedByUser(job.id);
+  const isSkipped = job.status === 'skipped' || userState === 'skipped';
 
   // Swipe drag motion values
   const x = useMotionValue(0);

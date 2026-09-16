@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, ChevronLeft, Plus, Trash2, CheckCircle2, ShieldCheck, Sparkles, ExternalLink, Camera } from 'lucide-react';
+import { Upload, ChevronLeft, Plus, Trash2, CheckCircle2, ShieldCheck, Sparkles, ExternalLink, Camera, Mail, AtSign, Check, X, Loader2 } from 'lucide-react';
 import PageTransition from '../components/PageTransition';
 import Input from '../components/Input';
 import Button from '../components/Button';
@@ -12,6 +12,8 @@ import { CATEGORIES, EXPERIENCE_LEVELS, SKILL_LEVELS, JOB_TYPES, REMOTE_OPTIONS 
 import { calculateProfileStrength } from '../services/proMatchEngine';
 import { aiService } from '../services/aiService';
 import { getUserPhoto, saveUserPhoto, removeUserPhoto } from '../data/storage.js';
+import { isValidEmail, isValidUsername, normalizeUsername } from '../utils/validators.js';
+import { getApiUrl } from '../config/apiConfig.js';
 import toast from 'react-hot-toast';
 
 const ProfileSetup = () => {
@@ -23,6 +25,11 @@ const ProfileSetup = () => {
   
   const userId = profile?.id || 'default_user';
   const [name, setName] = useState(profile?.name || '');
+  const [username, setUsername] = useState(profile?.username || '');
+  const [email, setEmail] = useState(profile?.email || '');
+  const [usernameStatus, setUsernameStatus] = useState(profile?.username ? 'available' : 'idle');
+  const [usernameMessage, setUsernameMessage] = useState('');
+  const [usernameSuggestions, setUsernameSuggestions] = useState([]);
   const [avatarUrl, setAvatarUrl] = useState(() => profilePhoto || getUserPhoto(userId) || '');
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [imgError, setImgError] = useState(false);
@@ -200,42 +207,186 @@ const ProfileSetup = () => {
     }
   };
 
-  const handleSave = () => {
-    const newErrors = {};
-    if (!name.trim()) newErrors.name = 'Name is required';
-    if (!profession.trim() && !primaryRole.trim()) newErrors.profession = 'Primary role is required';
-    
-    if (Object.keys(newErrors).length > 0) {
-      setErrors(newErrors);
+  const validateUrl = (url) => {
+    if (!url || typeof url !== 'string') return false;
+    return /^https?:\/\/.+\..+/i.test(url.trim());
+  };
+
+  const checkUsernameAvailability = async (uname) => {
+    if (!uname || !uname.trim()) {
+      setUsernameStatus('idle');
+      setUsernameMessage('');
+      setUsernameSuggestions([]);
       return;
     }
 
+    const clean = uname.trim();
+    if (!isValidUsername(clean)) {
+      setUsernameStatus('invalid');
+      setUsernameMessage('Enter a valid username (3-30 characters, letters, numbers, _, -, .)');
+      setUsernameSuggestions([]);
+      return;
+    }
+
+    setUsernameStatus('checking');
+    setUsernameMessage('Checking availability...');
+
+    try {
+      const authHeader = {};
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const rawAuth = window.localStorage.getItem('tf_auth');
+        if (rawAuth) {
+          const auth = JSON.parse(rawAuth);
+          if (auth.token) authHeader['Authorization'] = `Bearer ${auth.token}`;
+          if (auth.userId) authHeader['x-user-id'] = auth.userId;
+        }
+      }
+      if (userId && userId !== 'default_user') {
+        authHeader['x-user-id'] = userId;
+      }
+
+      const checkUrl = getApiUrl(`/profile/check-username?username=${encodeURIComponent(clean)}`);
+      const res = await fetch(checkUrl, {
+        headers: authHeader,
+      });
+      const data = await res.json();
+
+      if (data.available) {
+        setUsernameStatus('available');
+        setUsernameMessage('✓ Username available');
+        setUsernameSuggestions([]);
+      } else {
+        setUsernameStatus('taken');
+        setUsernameMessage('✕ Username already taken. Please try a different username.');
+        setUsernameSuggestions(data.suggestions || []);
+      }
+    } catch {
+      setUsernameStatus('idle');
+      setUsernameMessage('');
+    }
+  };
+
+  useEffect(() => {
+    if (!username || username.trim() === (profile?.username || '').trim()) {
+      if (username && username.trim() === (profile?.username || '').trim()) {
+        setUsernameStatus('available');
+        setUsernameMessage('✓ Username available');
+      } else {
+        setUsernameStatus('idle');
+        setUsernameMessage('');
+      }
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      checkUsernameAvailability(username);
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [username, profile?.username]);
+
+  const handleSelectSuggestion = (sug) => {
+    setUsername(sug);
+    checkUsernameAvailability(sug);
+  };
+
+  const handleSave = async () => {
+    const newErrors = {};
+    if (!name.trim()) newErrors.name = 'Full name is required';
+
+    // Username validation
+    if (username.trim()) {
+      if (!isValidUsername(username.trim())) {
+        newErrors.username = 'Enter a valid username (3-30 characters, letters, numbers, _, -, .)';
+      } else if (usernameStatus === 'taken') {
+        newErrors.username = 'Username already taken. Please try a different username.';
+      }
+    }
+
+    // Email validation (Mandatory)
+    if (!email.trim()) {
+      newErrors.email = 'Email is required.';
+    } else if (!isValidEmail(email.trim())) {
+      newErrors.email = 'Enter a valid email address.';
+    }
+
+    if (!profession.trim() && !primaryRole.trim()) newErrors.profession = 'Primary target role is required';
+    if (!category.trim()) newErrors.category = 'Job category is required';
+    if (!specialization.trim()) newErrors.specialization = 'Specialization / niche is required';
+    if (!skills || skills.length === 0) newErrors.skills = 'Add at least one skill.';
+
     const primaryPort = portfolioLinks.find((p) => p.isPrimary)?.url || portfolioLinks[0]?.url || '';
+    if (!primaryPort.trim()) {
+      newErrors.portfolio = 'Portfolio link is required';
+    } else if (!validateUrl(primaryPort)) {
+      newErrors.portfolio = 'Please enter a valid portfolio URL (e.g. https://...)';
+    }
 
-    saveProfile({
-      name,
-      profession: primaryRole || profession,
-      primaryRole: primaryRole || profession,
-      secondaryRoles,
-      category: category || 'Creative',
-      specialization: specialization || primaryRole || profession,
-      experience,
-      yearsOfExperience: Number(yearsOfExperience),
-      bio,
-      skills,
-      portfolioUrl: primaryPort,
-      portfolioLinks: portfolioLinks.filter((p) => p.url.trim().length > 0),
-      cvUrl: cvFileName ? 'uploaded' : null,
-      preferredJobTypes,
-      remotePreference,
-      expectedSalaryMin: Number(expectedSalaryMin),
-      expectedSalaryMax: Number(expectedSalaryMax),
-      currency,
-      availability,
-    });
+    if (!bio || !bio.trim()) {
+      newErrors.bio = 'Bio is required';
+    }
 
-    toast.success('Pro Profile saved successfully!');
-    navigate('/jobs');
+    if (!cvFileName) {
+      newErrors.cv = 'Please upload your CV to complete your profile';
+    }
+
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      if (newErrors.email) {
+        toast.error(newErrors.email);
+      } else if (newErrors.username) {
+        toast.error(newErrors.username);
+      } else {
+        toast.error('Please complete all required fields.');
+      }
+      return;
+    }
+
+    setErrors({});
+
+    try {
+      await saveProfile({
+        name: name.trim(),
+        username: username.trim() ? username.trim().toLowerCase() : undefined,
+        email: email.trim(),
+        profession: (primaryRole || profession).trim(),
+        primaryRole: (primaryRole || profession).trim(),
+        secondaryRoles,
+        category: category || 'Creative',
+        specialization: (specialization || primaryRole || profession).trim(),
+        experience,
+        yearsOfExperience: Number(yearsOfExperience),
+        bio: bio.trim(),
+        skills,
+        portfolioUrl: primaryPort.trim(),
+        portfolioLinks: portfolioLinks.filter((p) => p.url && p.url.trim().length > 0),
+        cvUrl: cvFileName ? 'uploaded' : null,
+        cvFileName: cvFileName || null,
+        preferredJobTypes,
+        remotePreference,
+        expectedSalaryMin: Number(expectedSalaryMin),
+        expectedSalaryMax: Number(expectedSalaryMax),
+        currency,
+        availability,
+      });
+
+      toast.success('Pro Profile saved successfully!');
+      navigate('/jobs');
+    } catch (err) {
+      if (err.status === 409 || err.code === 'USERNAME_TAKEN') {
+        setUsernameStatus('taken');
+        if (err.suggestions && err.suggestions.length > 0) {
+          setUsernameSuggestions(err.suggestions);
+        }
+        setErrors((prev) => ({
+          ...prev,
+          username: err.message || 'Username already taken. Please try a different username.',
+        }));
+        toast.error(err.message || 'Username already taken. Please try a different username.');
+      } else {
+        toast.error(err.message || 'Failed to save profile. Please try again.');
+      }
+    }
   };
 
   return (
@@ -336,6 +487,9 @@ const ProfileSetup = () => {
             type="button"
             onClick={() => {
               setName('Toufiq');
+              setUsername('toufiq_editor');
+              setEmail('toufiq@example.com');
+              setUsernameStatus('available');
               setProfession('Video Editor');
               setPrimaryRole('Lead Video Editor');
               setSecondaryRoles(['Short-Form Specialist', 'Motion Graphics Designer']);
@@ -378,6 +532,112 @@ const ProfileSetup = () => {
             error={errors.name}
           />
 
+          {/* Username with Live Availability Indicator */}
+          <div>
+            <label className="block text-sm font-medium text-text-primary mb-1">
+              Username <span className="text-text-muted text-xs font-normal">(unique @handle)</span>
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted text-sm font-semibold select-none">
+                @
+              </span>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => {
+                  setUsername(e.target.value);
+                  if (errors.username) setErrors((prev) => ({ ...prev, username: '' }));
+                }}
+                onBlur={() => {
+                  if (username) checkUsernameAvailability(username);
+                }}
+                placeholder="username"
+                className={`w-full bg-surface border rounded-xl pl-8 pr-10 py-2.5 text-sm text-text-primary placeholder:text-text-muted transition-colors focus:outline-none focus:ring-2 ${
+                  usernameStatus === 'available'
+                    ? 'border-emerald-500/50 focus:ring-emerald-500/20'
+                    : usernameStatus === 'taken' || errors.username
+                    ? 'border-rose-500 focus:ring-rose-500/20'
+                    : 'border-border focus:ring-primary/20 focus:border-primary'
+                }`}
+              />
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center">
+                {usernameStatus === 'checking' && (
+                  <Loader2 size={16} className="text-text-muted animate-spin" />
+                )}
+                {usernameStatus === 'available' && (
+                  <Check size={16} className="text-emerald-500" />
+                )}
+                {usernameStatus === 'taken' && (
+                  <X size={16} className="text-rose-500" />
+                )}
+              </div>
+            </div>
+
+            {/* Availability Feedback Message */}
+            {usernameStatus === 'available' && (
+              <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium mt-1.5 flex items-center gap-1">
+                ✓ Username available
+              </p>
+            )}
+            {(usernameStatus === 'taken' || errors.username) && (
+              <p className="text-xs text-rose-500 font-medium mt-1.5 flex items-center gap-1">
+                {errors.username || usernameMessage || '✕ Username already taken. Please try a different username.'}
+              </p>
+            )}
+
+            {/* Verified Available Suggestions Chips */}
+            {usernameStatus === 'taken' && usernameSuggestions.length > 0 && (
+              <div className="mt-2 p-2.5 rounded-xl bg-surface-hover/80 border border-border">
+                <span className="text-[11px] text-text-secondary block mb-1.5 font-medium">
+                  Available suggestions:
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {usernameSuggestions.map((sug) => (
+                    <button
+                      key={sug}
+                      type="button"
+                      onClick={() => handleSelectSuggestion(sug)}
+                      className="text-xs px-2.5 py-1 rounded-lg bg-primary/10 text-primary border border-primary/30 hover:bg-primary/20 transition-colors font-medium"
+                    >
+                      @{sug}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Mandatory Email for AI Agent Outreach */}
+          <div>
+            <label className="block text-sm font-medium text-text-primary mb-1">
+              Email Address <span className="text-rose-500 font-bold">*</span>
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted select-none">
+                <Mail size={16} />
+              </span>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (errors.email) setErrors((prev) => ({ ...prev, email: '' }));
+                }}
+                placeholder="your.email@example.com"
+                className={`w-full bg-surface border rounded-xl pl-9 pr-3 py-2.5 text-sm text-text-primary placeholder:text-text-muted transition-colors focus:outline-none focus:ring-2 ${
+                  errors.email ? 'border-rose-500 focus:ring-rose-500/20' : 'border-border focus:ring-primary/20 focus:border-primary'
+                }`}
+              />
+            </div>
+            {errors.email ? (
+              <p className="text-xs text-rose-500 mt-1">{errors.email}</p>
+            ) : (
+              <p className="text-[11px] text-text-muted mt-1">
+                Mandatory for AI agent outreach, client replies, and proposal notifications.
+              </p>
+            )}
+          </div>
+
           {/* Primary & Secondary Roles */}
           <div>
             <Input 
@@ -411,7 +671,7 @@ const ProfileSetup = () => {
 
           {/* Secondary Roles */}
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Secondary / Adjacent Roles</label>
+            <label className="block text-sm text-text-secondary mb-1">Secondary / Adjacent Roles (optional)</label>
             <div className="flex gap-2">
               <input
                 type="text"
@@ -459,7 +719,9 @@ const ProfileSetup = () => {
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="w-full bg-surface border border-border rounded-xl px-3 py-2.5 text-xs text-text-primary focus:outline-none focus:border-primary"
+                className={`w-full bg-surface border rounded-xl px-3 py-2.5 text-xs text-text-primary focus:outline-none focus:border-primary ${
+                  errors.category ? 'border-error' : 'border-border'
+                }`}
               >
                 {CATEGORIES.map((cat) => (
                   <option key={cat} value={cat}>
@@ -467,6 +729,7 @@ const ProfileSetup = () => {
                   </option>
                 ))}
               </select>
+              {errors.category && <p className="text-error text-xs mt-1">{errors.category}</p>}
             </div>
 
             <div>
@@ -487,7 +750,8 @@ const ProfileSetup = () => {
               label="Specialization / Niche" 
               placeholder="e.g. YouTube Retention, SaaS Promos" 
               value={specialization} 
-              onChange={(e) => setSpecialization(e.target.value)} 
+              onChange={(e) => setSpecialization(e.target.value)}
+              error={errors.specialization}
             />
           </div>
 
@@ -644,6 +908,7 @@ const ProfileSetup = () => {
                 ))}
               </div>
             )}
+            {errors.skills && <p className="text-error text-xs mt-1.5">{errors.skills}</p>}
           </div>
 
           {/* Multiple Portfolio Links */}
@@ -689,6 +954,7 @@ const ProfileSetup = () => {
                 </div>
               ))}
             </div>
+            {errors.portfolio && <p className="text-error text-xs mt-1.5">{errors.portfolio}</p>}
           </div>
 
           {/* Bio */}
@@ -699,13 +965,16 @@ const ProfileSetup = () => {
               placeholder="Brief summary of your skills, background, and what you specialize in..."
               value={bio}
               onChange={(e) => setBio(e.target.value)}
-              className="w-full bg-surface border border-border rounded-xl p-3 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary transition-colors"
+              className={`w-full bg-surface border rounded-xl p-3 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary transition-colors ${
+                errors.bio ? 'border-error' : 'border-border'
+              }`}
             />
+            {errors.bio && <p className="text-error text-xs mt-1.5">{errors.bio}</p>}
           </div>
 
           {/* CV Upload */}
           <div>
-            <label className="block text-sm text-text-secondary mb-1.5">CV Upload & Skill Extractor</label>
+            <label className="block text-sm text-text-secondary mb-1.5">CV Document Upload</label>
             <input
               type="file"
               ref={fileInputRef}
@@ -714,10 +983,12 @@ const ProfileSetup = () => {
               className="hidden"
             />
             <div 
-              className="border-2 border-dashed border-border rounded-card p-5 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-surface-hover transition-colors"
+              className={`border-2 border-dashed rounded-card p-5 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-surface-hover transition-colors ${
+                errors.cv ? 'border-error bg-error/5' : 'border-border'
+              }`}
               onClick={handleCvUploadSim}
             >
-              <Upload className="text-text-muted mb-1.5" size={22} />
+              <Upload className={errors.cv ? 'text-error mb-1.5' : 'text-text-muted mb-1.5'} size={22} />
               <p className="text-xs text-text-primary font-semibold">Click to upload CV (auto-extracts skills)</p>
               <p className="text-[10px] text-text-muted mt-0.5">PDF, DOC, DOCX up to 10MB</p>
               {cvFileName && (
@@ -727,6 +998,7 @@ const ProfileSetup = () => {
                 </p>
               )}
             </div>
+            {errors.cv && <p className="text-error text-xs mt-1.5">{errors.cv}</p>}
           </div>
 
           <Button fullWidth className="mt-6" onClick={handleSave}>

@@ -33,6 +33,7 @@ export function createUser(fields = {}) {
   return {
     id: fields.id || generateId(),
     name: fields.name || '',
+    username: fields.username || '',
     email: fields.email || '',
     phone: fields.phone || '',
     countryCode: fields.countryCode || '+91',
@@ -218,33 +219,43 @@ export function createNotification(fields = {}) {
 
 export function createJobSource(fields = {}) {
   const platform = fields.platform || 'facebook_group';
-  let type = fields.type || fields.sourceType;
-  if (!type) {
-    if (platform === 'reddit') type = fields.query ? 'reddit_search' : 'reddit_subreddit';
-    else if (platform === 'youtube') type = 'youtube_search';
-    else if (platform === 'x') type = 'x_search';
-    else if (platform === 'manual_import') type = 'manual_import';
-    else type = 'facebook_manual';
+  const isBuiltin = Boolean(fields.isBuiltin || fields.type === 'builtin');
+  const sourceCategory = fields.sourceCategory || (isBuiltin ? 'builtin' : 'custom');
+  
+  let subType = fields.subType || fields.sourceType;
+  if (!subType) {
+    if (platform === 'reddit') subType = fields.query ? 'reddit_search' : 'reddit_subreddit';
+    else if (platform === 'youtube') subType = 'youtube_search';
+    else if (platform === 'x') subType = 'x_search';
+    else if (platform === 'manual_import') subType = 'manual_import';
+    else subType = 'facebook_manual';
   }
 
   const name = fields.name || fields.sourceName || fields.groupName || (fields.query ? `Search: "${fields.query}"` : 'Untitled Source');
   const url = fields.url || fields.sourceUrl || fields.groupUrl || '';
+  const ownerUserId = isBuiltin ? null : (fields.ownerUserId || fields.userId || null);
 
   return {
     id: fields.id || generateId(),
-    userId: fields.userId || null,
+    userId: ownerUserId,
+    ownerUserId,
+    type: sourceCategory,
+    sourceCategory,
     platform,
     name,
-    type,
+    subType,
+    sourceType: subType,
     url,
     query: fields.query || '',
     enabled: fields.enabled !== undefined ? fields.enabled : true,
+    isBuiltin,
+    isDemo: fields.isDemo !== undefined ? fields.isDemo : isBuiltin,
     lastFetchedAt: fields.lastFetchedAt || fields.lastCheckedAt || null,
     status: fields.status || 'connected',
     createdAt: fields.createdAt || new Date().toISOString(),
+    updatedAt: fields.updatedAt || new Date().toISOString(),
     sourceName: name,
     sourceUrl: url,
-    sourceType: type,
     groupName: name,
     groupUrl: url,
     lastCheckedAt: fields.lastFetchedAt || fields.lastCheckedAt || null,

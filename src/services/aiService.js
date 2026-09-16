@@ -8,6 +8,7 @@
  */
 
 import { apiClient } from './apiClient.js';
+import { translationService } from './translationService.js';
 
 export class AIService {
   /**
@@ -73,20 +74,20 @@ export class AIService {
   }
 
   /**
-   * Generates a personalized application message.
+   * Generates a personalized application message adhering strictly to selected Tone & Length.
    */
   async generateApplicationMessage({
     job,
     profile,
-    tone = 'Professional',
-    length = 'Medium',
+    tone = 'Short & Direct',
+    length = 'Short',
     language = 'English',
     cvAttached = true,
     portfolioIncluded = true,
   }) {
     // Attempt backend AI generation first if live API is connected
     try {
-      const serverResult = await apiClient.generateApplication({ job, profile, mode: tone });
+      const serverResult = await apiClient.generateApplication({ job, profile, mode: tone, tone, length });
       if (serverResult && !serverResult.isDemo && serverResult.message) {
         return {
           message: serverResult.message,
@@ -95,37 +96,46 @@ export class AIService {
           isDemo: false,
         };
       }
-    } catch {
+    } catch (err) {
+      // If server returned 403 authorization error, bubble it up so upgrade modals can trigger
+      if (err?.status === 403 || err?.code === 'UPGRADE_REQUIRED' || err?.code === 'PRO_REQUIRED') {
+        throw err;
+      }
       // Graceful fallback to deterministic local engine
     }
 
     const isDemo = !this.isApiConfigured();
 
-    const company = job.company || job.client || job.author || 'Hiring Team';
+    const company = job?.company || job?.client || job?.author || 'Hiring Team';
     const userName = profile?.name || 'Applicant';
-    const profession = profile?.profession || 'Video Editor';
-    const specialization = profile?.specialization || 'Content Creator';
+    const profession = profile?.profession || 'Freelance Specialist';
+    const specialization = profile?.specialization || 'Creative Professional';
     const userSkills = Array.isArray(profile?.skills) ? profile.skills.map((s) => typeof s === 'string' ? s : s.name) : [];
     const experience = profile?.experience || 'experienced';
-    const jobTitle = job.title || 'Opportunity';
+    const jobTitle = job?.title || 'Opportunity';
 
     // Highlight overlapping skills only
-    const jobDescLower = (job.description || '').toLowerCase();
+    const jobDescLower = (job?.description || '').toLowerCase();
     const relevantSkills = userSkills.filter((sk) => jobDescLower.includes(sk.toLowerCase()));
     const skillsText = relevantSkills.length > 0 ? relevantSkills.slice(0, 3).join(', ') : userSkills.slice(0, 2).join(', ');
 
+    // Tone-tailored Greetings & Signoffs
     let greeting = `Hi ${company},`;
     let signoff = `Best regards,\n${userName}`;
 
     if (tone === 'Friendly') {
       greeting = `Hey ${company} team! 👋`;
-      signoff = `Excited to connect,\n${userName}`;
+      signoff = `Warm regards & excited to connect,\n${userName}`;
     } else if (tone === 'Confident') {
       greeting = `Dear ${company},`;
-      signoff = `Looking forward to driving results,\n${userName}`;
+      signoff = `Ready to drive immediate results,\n${userName}`;
     } else if (tone === 'Short & Direct') {
       greeting = `Hi ${company},`;
       signoff = `Best,\n${userName}`;
+    } else {
+      // Professional default
+      greeting = `Dear ${company} Hiring Team,`;
+      signoff = `Best regards,\n${userName}`;
     }
 
     // Portfolio attachment phrase
@@ -139,23 +149,43 @@ export class AIService {
 
     let body = '';
 
+    // 1. SHORT LENGTH
     if (length === 'Short') {
       if (tone === 'Short & Direct') {
-        body = `I am a ${profession} (${experience}) with a focus on ${specialization}${skillsText ? ` using ${skillsText}` : ''}. I saw your posting for "${jobTitle}" and would love to take this on.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Available to start immediately. Let's connect!`;
-      } else {
-        body = `I'm reaching out regarding your "${jobTitle}" role. As a ${profession} specializing in ${specialization}, I have hands-on experience delivering high-retention work${skillsText ? ` with ${skillsText}` : ''}.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}I'd welcome the chance to discuss how I can help your team succeed.`;
-      }
-    } else if (length === 'Detailed') {
-      body = `I am writing to express my strong interest in your "${jobTitle}" opening. As a ${experience} ${profession} specializing in ${specialization}, I have built my career around crafting engaging, polished content that captures audience attention.\n\nHaving reviewed your requirements, my background aligns closely with what you are looking for:\n• Specialized focus in ${specialization} with rapid, dependable turnaround\n${skillsText ? `• Daily hands-on mastery of ${skillsText}\n` : ''}• Clear, reliable communication across remote workflows\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}I would love to learn more about your upcoming production schedule and discuss how we can partner together. Thank you for your time and consideration!`;
-    } else {
-      // Medium (Default)
-      if (tone === 'Friendly') {
-        body = `I came across your post for "${jobTitle}" and was immediately excited to apply! As a ${profession} specializing in ${specialization}, I love helping creators and brands turn concepts into engaging, high-retention content.\n\nMy workflow focuses heavily on ${skillsText || 'pacing and storytelling'}, ensuring every project exceeds expectations.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}I'd love to chat about how I can bring value to your projects. Looking forward to hearing from you!`;
+        body = `I am a ${profession} (${experience}) specializing in ${specialization}${skillsText ? ` with core expertise in ${skillsText}` : ''}. I saw your posting for "${jobTitle}" and would love to take this on.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Available to start immediately with fast turnaround. Let's connect!`;
+      } else if (tone === 'Friendly') {
+        body = `I was excited to come across your post for "${jobTitle}"! As a ${profession} focused on ${specialization}${skillsText ? ` using ${skillsText}` : ''}, I love collaborating with creative teams to bring ideas to life smoothly and quickly.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Would love to hop on a quick chat and see how we can work together!`;
       } else if (tone === 'Confident') {
-        body = `I am writing to apply for your "${jobTitle}" opportunity. With my background as a ${experience} ${profession} specializing in ${specialization}, I have consistently produced high-impact, polished results${skillsText ? ` utilizing ${skillsText}` : ''}.\n\nI understand the importance of quality, pacing, and hitting strict deadlines without compromising production value.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Let's set up a quick conversation to discuss your goals for this role.`;
+        body = `Your search for a "${jobTitle}" directly aligns with my track record as a ${experience} ${profession} in ${specialization}. I specialize in ${skillsText || 'high-impact deliverables'} that hit benchmarks from day one.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Let's connect to review your exact targets and get moving.`;
       } else {
-        // Professional default
-        body = `I am writing to apply for the "${jobTitle}" position. I am a ${profession} specializing in ${specialization}${skillsText ? ` with core expertise in ${skillsText}` : ''}.\n\nThroughout my work, I prioritize strong visual storytelling, reliable project timelines, and consistent quality aligned with client objectives.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}I would welcome the opportunity to discuss how my skill set matches your team's needs. Thank you for your consideration.`;
+        // Professional Short
+        body = `I am writing to express my interest in the "${jobTitle}" role at ${company}. As a ${experience} ${profession} specializing in ${specialization}${skillsText ? ` (${skillsText})` : ''}, I bring a disciplined workflow and consistent delivery to every project.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}I welcome the opportunity to discuss how I can support your goals.`;
+      }
+    } 
+    // 2. DETAILED LENGTH
+    else if (length === 'Detailed') {
+      if (tone === 'Short & Direct') {
+        body = `I am submitting my candidacy for the "${jobTitle}" position. Below is a detailed, no-fluff summary of my qualifications and operational readiness:\n\n1. Background & Specialization:\n• ${experience} ${profession} centered on ${specialization}\n${skillsText ? `• Technical Stack: ${skillsText}\n` : ''}• Immediate availability with full remote infrastructure\n\n2. Key Operational Deliverables:\n• Rigorous adherence to brief requirements and timeline constraints\n• Proactive version management and prompt feedback integration\n• Transparent async updates ensuring project momentum\n\n3. Proof of Work:\n${portfolioLine ? `${portfolioLine}\n` : '• Portfolio available upon request\n'}${cvLine ? `${cvLine}\n` : ''}\nIf this matches what you need, let's schedule an intro call today.`;
+      } else if (tone === 'Friendly') {
+        body = `I was thrilled to see your opening for "${jobTitle}" and knew right away that I wanted to apply! As a dedicated ${profession} who lives and breathes ${specialization}, my passion is collaborating with forward-thinking teams like ${company} to craft standout, memorable work.\n\nHere is what working together looks like:\n• Creative Resonance: I take the time to deeply understand your brand voice, audience dynamics, and visual standards\n${skillsText ? `• Toolkit & Craft: Hands-on expertise with ${skillsText}, bringing fluid storytelling and polish to every asset\n` : ''}• Effortless Collaboration: Responsive communication, positive reception of feedback, and dependable deadlines\n• Ongoing Partnership: Always thinking a step ahead to keep our workflow smooth, efficient, and enjoyable\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}I would truly love the chance to connect, hear about your vision for this project, and explore how we can team up. Looking forward to our conversation!`;
+      } else if (tone === 'Confident') {
+        body = `I am applying for your "${jobTitle}" position to deliver the high-caliber execution and measurable impact that ${company} expects. As a ${experience} ${profession} with a specialized focus on ${specialization}, I have consistently helped clients elevate their standards and outpace competitors.\n\nWhy this partnership will succeed:\n• Decisive Execution: In-depth expertise in ${specialization}${skillsText ? ` using ${skillsText}` : ''}, turning complex briefs into polished deliverables with zero guesswork\n• Commercial Impact: Every detail is tailored to hold audience attention, strengthen retention, and drive client objectives\n• Flawless Reliability: A proven record of delivering under strict deadlines without ever compromising on production quality\n• Ownership: I manage projects end-to-end with high accountability, so you can focus on broader business goals\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Let's set up a conversation this week to review your roadmap and begin executing.`;
+      } else {
+        // Professional Detailed
+        body = `I am writing to present my comprehensive application for the "${jobTitle}" position at ${company}. As a ${experience} ${profession} specializing in ${specialization}${skillsText ? ` with extensive hands-on experience in ${skillsText}` : ''}, I offer a combination of technical mastery, workflow discipline, and creative excellence.\n\nHaving thoroughly evaluated your job requirements, my core strengths directly complement your operational needs:\n• Domain Mastery: In-depth understanding of ${specialization} principles and modern industry standards\n${skillsText ? `• Technical Fluency: Advanced day-to-day execution utilizing ${skillsText}\n` : ''}• Project Governance: Consistent delivery on time and within scope, supported by structured async updates\n• Collaborative Mindset: Smooth integration into established client teams and feedback systems\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}I welcome the opportunity to discuss how my expertise can directly support ${company}'s current and upcoming initiatives. Thank you for your review and consideration.`;
+      }
+    } 
+    // 3. MEDIUM LENGTH (DEFAULT)
+    else {
+      if (tone === 'Short & Direct') {
+        body = `I am reaching out regarding the "${jobTitle}" opening. Here is a direct summary of what I bring:\n• Role: ${profession} (${experience}) with a focus on ${specialization}\n${skillsText ? `• Core Toolkit: ${skillsText}\n` : ''}• Standards: Zero missed deadlines, clear communication, and rapid turnaround\n\nI have reviewed your project requirements and can hit the ground running immediately.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Let me know if you have 5 minutes for a brief call.`;
+      } else if (tone === 'Friendly') {
+        body = `I came across your post for "${jobTitle}" and couldn't resist reaching out! As a ${profession} with a strong passion for ${specialization}, I love helping teams turn fresh concepts into engaging, high-quality deliverables that audiences genuinely connect with.\n\nMy workflow is built around open communication, quick feedback loops, and mastery of ${skillsText || 'essential creative tools'}. Whether tackling day-to-day revisions or steering major project phases, I make collaboration effortless and fun.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}I'd love to learn more about what you're building next. Let's set up a time to chat!`;
+      } else if (tone === 'Confident') {
+        body = `I am applying for your "${jobTitle}" opportunity because my background as a ${experience} ${profession} in ${specialization} is proven to generate real, measurable outcomes.\n\nI don't just complete assignments—I optimize every deliverable for retention, visual authority, and strategic alignment using ${skillsText || 'industry-standard tools'}. You can count on precision, proactive problem-solving, and a commitment to exceeding project benchmarks from the very first brief.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Let's schedule a brief conversation to align on your objectives and start executing.`;
+      } else {
+        // Professional Medium
+        body = `I am writing to formally apply for the "${jobTitle}" position. With my background as a ${experience} ${profession} specializing in ${specialization}${skillsText ? ` and proficiency in ${skillsText}` : ''}, I have developed a structured, reliable approach to delivering polished, client-aligned work.\n\nThroughout my freelance career, I have prioritized clear stakeholder communication, adherence to brand guidelines, and dependable milestone delivery. I am well-versed in remote workflows and accustomed to managing tight production schedules.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Thank you for your time and consideration. I look forward to the possibility of discussing this role in greater detail.`;
       }
     }
 
@@ -170,29 +200,19 @@ export class AIService {
   }
 
   /**
-   * Improves and translates a user's Bangla draft into a natural, professional English application.
+   * Translates an application message using Google Translate abstraction.
+   */
+  async translateApplicationMessage({ text, targetLanguage = 'es', job, profile }) {
+    return translationService.translateMessage({ text, targetLanguage, job, profile });
+  }
+
+  /**
+   * Backward-compatible alias for legacy references.
    */
   async translateAndImproveBangla(banglaDraft = '', profile, job) {
-    const isDemo = !this.isApiConfigured();
-    const company = job.company || job.client || job.author || 'Hiring Team';
-    const userName = profile?.name || 'Applicant';
-    const profession = profile?.profession || 'Video Editor';
-    const specialization = profile?.specialization || 'Content Creator';
-
-    const portfolioLine = profile?.portfolioUrl
-      ? `Portfolio link: ${profile.portfolioUrl}`
-      : '';
-    const cvLine = profile?.cvUrl ? 'CV attached for your review.' : '';
-
-    // Natural translation preserving candidate's voice
-    const translatedMessage = `Hi ${company},\n\nI am reaching out regarding your ${job.title || 'opening'}. I am a dedicated ${profession} specializing in ${specialization}, and I have extensive practical experience editing and producing high-quality content.\n\nI reviewed your requirements and am confident I can handle your videos with great pacing, clean cuts, and attention to detail. I work efficiently, respect deadlines, and am ready to get started immediately.\n\n${portfolioLine ? `${portfolioLine}\n` : ''}${cvLine ? `${cvLine}\n` : ''}\nLooking forward to hearing from you!\n\nBest regards,\n${userName}`;
-
-    return {
-      message: translatedMessage,
-      originalDraft: banglaDraft,
-      isDemo,
-    };
+    return translationService.translateMessage({ text: banglaDraft, targetLanguage: 'bn', job, profile });
   }
+
 
   /**
    * Generates a concise, conversational version tailored for WhatsApp deep linking.

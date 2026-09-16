@@ -192,6 +192,11 @@ const Profile = () => {
             </button>
           </div>
           <h2 className="text-lg font-bold mt-2.5 text-text-primary">{profile?.name || 'Freelancer'}</h2>
+          {profile?.username && (
+            <span className="text-xs font-semibold text-text-muted block mt-0.5">
+              @{profile.username}
+            </span>
+          )}
           
           <p className="text-xs font-semibold text-primary mt-0.5">
             {profile?.headline || `${profile?.primaryRole || 'Video Editor'} • ${profile?.specialization || 'YouTube Content'}`}
@@ -202,6 +207,13 @@ const Profile = () => {
             <span>•</span>
             <span>{profile?.yearsOfExperience !== undefined ? profile.yearsOfExperience : 3} Years Experience</span>
           </div>
+
+          {profile?.email && (
+            <div className="flex items-center gap-1.5 mt-2 text-xs text-text-secondary bg-surface-hover/60 px-2.5 py-1 rounded-lg border border-border/80">
+              <Mail size={12} className="text-primary" />
+              <span>{profile.email}</span>
+            </div>
+          )}
 
           {profile?.bio && (
             <p className="text-xs text-text-muted mt-2.5 max-w-xs leading-relaxed italic bg-surface-hover/70 px-3 py-2 rounded-xl border border-border">
@@ -242,10 +254,12 @@ const Profile = () => {
         {(() => {
           const sub = subscriptionService.getSubscription();
           const plan = subscriptionService.getPlanDetails(currentPlan) || subscriptionService.getCurrentPlanDetails();
-          const usage = usageService.getTodayUsage();
+          const quotaStatus = usageService.getQuotaStatus();
+          const used = quotaStatus.used;
+          const limit = quotaStatus.limit;
+          const refillFormatted = quotaStatus.refillFormatted;
+          const bonusTokens = quotaStatus.bonusTokens;
           const credits = usageService.getCreditsSummary();
-          const dailyLimit = plan?.limits?.applicationsPerDay ?? 5;
-          const usedToday = usage?.applicationsUsed || 0;
 
           return (
             <Card className="p-4 bg-surface border border-border shadow-sm space-y-3">
@@ -280,18 +294,33 @@ const Profile = () => {
 
               <div className="p-2.5 rounded-xl bg-surface-hover/70 border border-border flex items-center justify-between text-xs">
                 <div>
-                  <span className="text-text-muted text-[11px]">Today's Applications:</span>
+                  <span className="text-text-muted text-[11px]">Applications:</span>
                   <div className="font-bold text-text-primary mt-0.5">
-                    {usedToday} / {dailyLimit} used
+                    {used} / {limit}
                   </div>
+                  <span className="text-[10px] text-text-muted">
+                    Refreshes in: <strong className="text-primary">{refillFormatted}</strong>
+                  </span>
                 </div>
                 <div className="text-right">
-                  <span className="text-text-muted text-[11px]">Total Extra Credits:</span>
+                  <span className="text-text-muted text-[11px]">Available:</span>
                   <div className="font-bold text-amber-500 mt-0.5">
-                    {credits.activeCredits + rewardCredits} available
+                    {quotaStatus.availableApplications} total
                   </div>
+                  {bonusTokens > 0 && (
+                    <span className="text-[10px] font-semibold text-text-primary block">
+                      Bonus Tokens: +{bonusTokens}
+                    </span>
+                  )}
                 </div>
               </div>
+
+              {quotaStatus.isExhausted && (
+                <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 dark:text-amber-400 flex items-center justify-between">
+                  <span className="font-bold">Application quota exhausted</span>
+                  <span>Next refill in {refillFormatted}</span>
+                </div>
+              )}
             </Card>
           );
         })()}

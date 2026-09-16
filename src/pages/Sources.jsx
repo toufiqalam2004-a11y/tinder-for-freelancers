@@ -10,10 +10,11 @@ import {
   Sparkles,
   ToggleLeft,
   ToggleRight,
-  FilePlus2,
-  RefreshCw,
   Crown,
   Lock,
+  AlertTriangle,
+  Info,
+  ShieldCheck,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -27,18 +28,27 @@ import UpgradeModal from '../components/UpgradeModal';
 import { useSources } from '../contexts/SourcesContext';
 import { isDemoMode, setDemoMode } from '../data/storage.js';
 import { subscriptionService } from '../services/subscriptionService';
+import { getCustomSourceLimit } from '../utils/sourceConfig.js';
+import { toCanonicalPlan } from '../utils/planUtils.js';
 
 const Sources = () => {
   const navigate = useNavigate();
-  const { sources, removeSource, toggleSourceEnabled } = useSources();
+  const { sources, builtinSources, customSources, removeSource, toggleSourceEnabled } = useSources();
   const [demoMode, setDemoState] = useState(() => isDemoMode());
   const [refreshKey, setRefreshKey] = useState(0);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState('');
 
+  const currentPlanDetails = subscriptionService.getCurrentPlanDetails();
+  const canonicalPlan = toCanonicalPlan(currentPlanDetails.id);
+  const planLimit = getCustomSourceLimit(canonicalPlan);
+  const customCount = customSources.length;
+  const isLimitReached = customCount >= planLimit;
+  const isOverLimit = customCount > planLimit;
+
   const handleOpenAddModal = () => {
-    const check = subscriptionService.canAddSource(sources.length);
+    const check = subscriptionService.canAddSource(customCount);
     if (!check.allowed) {
       setUpgradeReason(check.reason);
       setShowUpgradeModal(true);
@@ -55,10 +65,10 @@ const Sources = () => {
     setRefreshKey((k) => k + 1);
   };
 
-  const handleRemove = (id) => {
+  const handleRemove = async (id) => {
     if (window.confirm('Are you sure you want to remove this source?')) {
-      removeSource(id);
-      toast.success('Source removed.');
+      await removeSource(id);
+      toast.success('Source removed. Slot has been freed.');
       setRefreshKey((k) => k + 1);
     }
   };
@@ -69,7 +79,7 @@ const Sources = () => {
     setRefreshKey((k) => k + 1);
   };
 
-  // Grouped counts
+  // Grouped counts across all active sources
   const fbCount = sources.filter((s) => s.platform === 'facebook_group').length;
   const redditCount = sources.filter((s) => s.platform === 'reddit').length;
   const youtubeCount = sources.filter((s) => s.platform === 'youtube').length;
@@ -94,15 +104,16 @@ const Sources = () => {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-text-primary">Job Sources</h1>
-            <p className="text-text-secondary text-sm mt-0.5">
-              {sources.length} active connection{sources.length === 1 ? '' : 's'}
+            <h1 className="text-2xl font-bold text-text-primary">Sources</h1>
+            <p className="text-text-secondary text-xs mt-0.5">
+              Add sources to discover opportunities that match your profile.
             </p>
           </div>
           <Button
             variant="primary"
             size="sm"
             onClick={handleOpenAddModal}
+            disabled={isLimitReached}
             className="text-xs"
           >
             <Plus size={15} className="mr-1" />
@@ -110,92 +121,93 @@ const Sources = () => {
           </Button>
         </div>
 
-        {/* Demo Mode Configuration Bar */}
-        <div className="mt-4 bg-surface-hover/80 border border-border rounded-xl p-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Sparkles size={16} className="text-primary-light" />
-            <div>
-              <span className="text-xs font-semibold text-text-primary block">
-                {demoMode ? 'Demo Mode Active' : 'Live API Mode'}
+        {/* Custom Source Quota Usage Bar */}
+        <div className="mt-4 bg-surface border border-border rounded-xl p-3.5 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-text-primary uppercase tracking-wider">
+                My Sources
               </span>
-              <span className="text-[10px] text-text-muted">
-                {demoMode
-                  ? 'Simulated hiring opportunities without API keys'
-                  : 'Official Reddit, YouTube & X live API calls'}
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary uppercase">
+                {currentPlanDetails.name}: {customCount} / {planLimit}
               </span>
             </div>
-          </div>
-          <button
-            onClick={handleToggleDemo}
-            className="text-text-secondary hover:text-text-primary p-1 transition-colors"
-            title="Toggle Demo Mode"
-          >
-            {demoMode ? (
-              <ToggleRight size={28} className="text-primary-light" />
-            ) : (
-              <ToggleLeft size={28} className="text-text-muted" />
+            {isLimitReached && (
+              <span className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                {isOverLimit ? 'Over Limit' : 'Limit Reached'}
+              </span>
             )}
-          </button>
-        </div>
-
-        {/* Connected Sources Overview Grid */}
-        <div className="mt-4">
-          <span className="text-xs font-semibold text-text-secondary uppercase tracking-wider block mb-2">
-            Platforms Connected
-          </span>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="bg-surface border border-border rounded-xl p-2.5 flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-[#FF4500]/15 flex items-center justify-center flex-shrink-0">
-                <Radio className="text-[#FF4500]" size={16} />
-              </div>
-              <div className="min-w-0">
-                <span className="text-[10px] text-text-muted block truncate">Reddit</span>
-                <span className="text-xs font-bold text-text-primary">{redditCount} sources</span>
-              </div>
-            </div>
-
-            <div className="bg-surface border border-border rounded-xl p-2.5 flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-[#FF0000]/15 flex items-center justify-center flex-shrink-0">
-                <Youtube className="text-[#FF0000]" size={16} />
-              </div>
-              <div className="min-w-0">
-                <span className="text-[10px] text-text-muted block truncate">YouTube</span>
-                <span className="text-xs font-bold text-text-primary">{youtubeCount} searches</span>
-              </div>
-            </div>
-
-            <div className="bg-surface border border-border rounded-xl p-2.5 flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-surface-hover flex items-center justify-center flex-shrink-0 border border-border">
-                <MessageSquare className="text-text-primary" size={15} />
-              </div>
-              <div className="min-w-0">
-                <span className="text-[10px] text-text-muted block truncate">X (Twitter)</span>
-                <span className="text-xs font-bold text-text-primary">{xCount} searches</span>
-              </div>
-            </div>
-
-            <div className="bg-surface border border-border rounded-xl p-2.5 flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-[#1877F2]/15 flex items-center justify-center flex-shrink-0">
-                <Facebook className="text-[#1877F2]" size={16} />
-              </div>
-              <div className="min-w-0">
-                <span className="text-[10px] text-text-muted block truncate">Facebook Groups</span>
-                <span className="text-xs font-bold text-text-primary">{fbCount} sources</span>
-              </div>
-            </div>
           </div>
+
+          {/* Progress Indicator */}
+          <div className="w-full bg-surface-hover h-2 rounded-full overflow-hidden border border-border/50">
+            <div
+              className={`h-full transition-all duration-300 ${
+                isOverLimit
+                  ? 'bg-rose-500'
+                  : isLimitReached
+                  ? 'bg-amber-500'
+                  : 'bg-primary'
+              }`}
+              style={{ width: `${Math.min(100, (customCount / planLimit) * 100)}%` }}
+            />
+          </div>
+
+          {/* Quota notices */}
+          {isOverLimit ? (
+            <div className="mt-2.5 flex items-start gap-2 text-xs text-rose-500 bg-rose-500/10 p-2 rounded-lg border border-rose-500/20">
+              <AlertTriangle size={15} className="flex-shrink-0 mt-0.5" />
+              <span>
+                You currently have <strong>{customCount}</strong> custom sources, which exceeds the {currentPlanDetails.name} plan limit of <strong>{planLimit}</strong>. Your existing sources remain active, but you cannot add new ones until you upgrade or remove excess sources.
+              </span>
+            </div>
+          ) : isLimitReached ? (
+            <div className="mt-2.5 flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 p-2 rounded-lg border border-amber-500/20">
+              <Info size={15} className="flex-shrink-0 mt-0.5" />
+              <span>
+                You have reached the maximum allowed custom sources ({planLimit}) for the {currentPlanDetails.name} plan. Upgrade your subscription to connect more sources.
+              </span>
+            </div>
+          ) : (
+            <p className="text-[11px] text-text-muted mt-2">
+              Free plan allows 1 custom source, Plus allows 3, and Pro allows 5.
+            </p>
+          )}
         </div>
 
-        {/* Sources List */}
+        {/* MY SOURCES (CUSTOM USER SOURCES) LIST */}
         <div className="mt-6">
-          {sources.length === 0 ? (
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <h2 className="text-sm font-bold text-text-primary">Connected Custom Sources</h2>
+              <p className="text-[11px] text-text-muted mt-0.5">
+                {customCount} of {planLimit} slots used
+              </p>
+            </div>
+            {isLimitReached && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setUpgradeReason(subscriptionService.canAddSource(customCount).reason);
+                  setShowUpgradeModal(true);
+                }}
+                className="text-[11px] !py-1 !px-2.5 text-primary border-primary/30"
+              >
+                <Crown size={12} className="mr-1" />
+                Upgrade
+              </Button>
+            )}
+          </div>
+
+          {customSources.length === 0 ? (
             <EmptyState
               icon={Globe}
-              title="No sources connected yet"
-              subtitle="Add Reddit, YouTube, X, or Facebook groups to discover opportunities."
+              title="No custom sources added yet"
+              subtitle={`You have ${planLimit} custom source slot${planLimit === 1 ? '' : 's'} available on your ${currentPlanDetails.name} plan.`}
               action={{
-                label: '+ Connect First Source',
-                onClick: () => setIsAddModalOpen(true),
+                label: '+ Connect Custom Source',
+                onClick: handleOpenAddModal,
               }}
             />
           ) : (
@@ -203,9 +215,9 @@ const Sources = () => {
               variants={containerVariants}
               initial="hidden"
               animate="visible"
-              className="space-y-3"
+              className="space-y-3 mt-3"
             >
-              {sources.map((source) => (
+              {customSources.map((source) => (
                 <motion.div key={source.id} variants={itemVariants}>
                   <SourceCard
                     source={source}
@@ -230,7 +242,7 @@ const Sources = () => {
         <UpgradeModal
           isOpen={showUpgradeModal}
           onClose={() => setShowUpgradeModal(false)}
-          title="Source Limit Reached"
+          title="Custom Source Limit"
           message={upgradeReason}
         />
       </div>

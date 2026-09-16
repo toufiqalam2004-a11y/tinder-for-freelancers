@@ -1,4 +1,5 @@
 import { STORAGE_KEYS, SESSION_KEYS } from '../utils/constants.js';
+import { getApiUrl } from '../config/apiConfig.js';
 
 // Clean up any legacy persistent photos from localStorage
 try {
@@ -52,9 +53,17 @@ export function getUser(userId = null) {
   let user = null;
   if (uid && uid !== 'user-default') {
     user = getItem(`tf_user_${uid}`);
-  }
-  if (!user) {
-    user = getItem(STORAGE_KEYS.USER);
+    if (!user) {
+      const globalUser = getItem(STORAGE_KEYS.USER);
+      if (globalUser && (globalUser.id === uid || globalUser.phone === uid)) {
+        user = globalUser;
+      }
+    }
+  } else {
+    const globalUser = getItem(STORAGE_KEYS.USER);
+    if (globalUser && (!globalUser.phone || globalUser.phone === '')) {
+      user = globalUser;
+    }
   }
   if (user) {
     // Ensure avatarUrl/photoUrl are NEVER permanently restored from localStorage
@@ -74,6 +83,21 @@ export function saveUser(user) {
     }
     setItem(STORAGE_KEYS.USER, persistentData);
   }
+}
+
+export function clearActiveUserSessionStorage() {
+  try {
+    const storage = typeof window !== 'undefined' && window.localStorage ? window.localStorage : (typeof globalThis !== 'undefined' && globalThis.localStorage ? globalThis.localStorage : null);
+    if (storage) {
+      storage.removeItem('tf_subscription');
+      storage.removeItem(STORAGE_KEYS.USER);
+      storage.removeItem('tf_profile');
+      storage.removeItem('tf_quotas');
+      storage.removeItem('tf_daily_usage');
+      storage.removeItem(STORAGE_KEYS.APPLICATIONS_TRASH);
+    }
+  } catch {}
+  clearAllSessionPhotos();
 }
 
 // ====================================================
@@ -203,9 +227,92 @@ export function updateOutreachPreferences(preferences) {
   return updated;
 }
 
-// Sources
-export function getSources() {
-  return getItem(STORAGE_KEYS.SOURCES) || [];
+// Demo Job Sources (Explicitly labeled demo sources / Built-in Sources)
+export const DEMO_SOURCES = [
+  {
+    id: 'demo-src-reddit',
+    platform: 'reddit',
+    name: 'Reddit Freelance Hub (Demo)',
+    url: 'https://reddit.com/r/forhire',
+    isDemo: true,
+    enabled: true,
+    category: 'Creative & Video',
+    fetchInterval: 15,
+    type: 'builtin',
+    ownerUserId: null,
+    userId: null,
+  },
+  {
+    id: 'demo-src-youtube',
+    platform: 'youtube',
+    name: 'YouTube Creator Opportunities (Demo)',
+    url: 'https://youtube.com',
+    isDemo: true,
+    enabled: true,
+    category: 'Creative & Video',
+    fetchInterval: 15,
+    type: 'builtin',
+    ownerUserId: null,
+    userId: null,
+  },
+  {
+    id: 'demo-src-x',
+    platform: 'x',
+    name: 'X Creative Network (Demo)',
+    url: 'https://x.com',
+    isDemo: true,
+    enabled: true,
+    category: 'Creative & Video',
+    fetchInterval: 15,
+    type: 'builtin',
+    ownerUserId: null,
+    userId: null,
+  },
+];
+
+export const BUILTIN_SOURCES = DEMO_SOURCES;
+
+export function getBuiltinSources() {
+  return [...DEMO_SOURCES];
+}
+
+// Sources (Built-in + User-Scoped Custom Sources)
+export function getSources(userId = null) {
+  const currentUserId = userId || getAuth()?.userId || null;
+  const stored = getItem(STORAGE_KEYS.SOURCES);
+
+  if (!Array.isArray(stored) || stored.length === 0) {
+    return [...DEMO_SOURCES];
+  }
+
+  // Ensure built-in sources are always present
+  const builtinMap = new Map(DEMO_SOURCES.map((s) => [s.id, s]));
+  const customSources = [];
+
+  for (const s of stored) {
+    if (s.type === 'builtin' || s.isBuiltin || s.isDemo) {
+      if (!builtinMap.has(s.id)) {
+        builtinMap.set(s.id, s);
+      }
+    } else {
+      // User custom source
+      if (!currentUserId || !s.userId || s.userId === currentUserId || s.ownerUserId === currentUserId) {
+        customSources.push(s);
+      }
+    }
+  }
+
+  return [...builtinMap.values(), ...customSources];
+}
+
+export function getUserCustomSources(userId = null) {
+  const currentUserId = userId || getAuth()?.userId || null;
+  const allSources = getSources(currentUserId);
+  return allSources.filter(
+    (s) => s.type === 'custom' && !s.isBuiltin && !s.isDemo && (
+      !currentUserId || s.userId === currentUserId || s.ownerUserId === currentUserId
+    )
+  );
 }
 
 export function saveSources(sources) {
@@ -213,7 +320,7 @@ export function saveSources(sources) {
 }
 
 export function addSource(source) {
-  const sources = getSources();
+  const sources = getSources(source.userId || source.ownerUserId);
   const existingIdx = sources.findIndex(
     (s) => s.id === source.id || (s.platform === source.platform && s.name === source.name && s.url === source.url)
   );
@@ -226,30 +333,60 @@ export function addSource(source) {
   return sources;
 }
 
-export function removeSource(id) {
-  const sources = getSources().filter((s) => s.id !== id);
-  saveSources(sources);
-  return sources;
+export function removeSource(id, userId = null) {
+  // Built-in sources cannot be removed by normal users
+  if (DEMO_SOURCES.some((b) => b.id === id)) {
+    return getSources(userId);
+  }
+  const currentUserId = userId || getAuth()?.userId || null;
+  const stored = getItem(STORAGE_KEYS.SOURCES);
+  if (Array.isArray(stored)) {
+    const filtered = stored.filter((s) => {
+      if (s.id !== id) return true;
+      // If matching id, verify ownership if user is provided
+      if (currentUserId && s.userId && s.userId !== currentUserId && s.ownerUserId !== currentUserId) {
+        return true; // Don't delete another user's source
+      }
+      return false;
+    });
+    saveSources(filtered);
+  }
+  return getSources(currentUserId);
 }
 
-export function updateSource(id, updates) {
-  const sources = getSources();
-  const index = sources.findIndex((s) => s.id === id);
-  if (index !== -1) {
-    sources[index] = { ...sources[index], ...updates };
-    saveSources(sources);
+export function updateSource(id, updates, userId = null) {
+  // Built-in sources cannot be modified by normal users
+  if (DEMO_SOURCES.some((b) => b.id === id)) {
+    return getSources(userId);
   }
-  return sources;
+  const currentUserId = userId || getAuth()?.userId || null;
+  const stored = getItem(STORAGE_KEYS.SOURCES) || [];
+  const index = stored.findIndex((s) => s.id === id);
+  if (index !== -1) {
+    if (!currentUserId || !stored[index].userId || stored[index].userId === currentUserId || stored[index].ownerUserId === currentUserId) {
+      stored[index] = { ...stored[index], ...updates, updatedAt: new Date().toISOString() };
+      saveSources(stored);
+    }
+  }
+  return getSources(currentUserId);
 }
 
-export function toggleSourceEnabled(id) {
-  const sources = getSources();
-  const index = sources.findIndex((s) => s.id === id);
-  if (index !== -1) {
-    sources[index].enabled = !sources[index].enabled;
-    saveSources(sources);
+export function toggleSourceEnabled(id, userId = null) {
+  // Built-in sources cannot be modified by normal users
+  if (DEMO_SOURCES.some((b) => b.id === id)) {
+    return getSources(userId);
   }
-  return sources;
+  const currentUserId = userId || getAuth()?.userId || null;
+  const stored = getItem(STORAGE_KEYS.SOURCES) || [];
+  const index = stored.findIndex((s) => s.id === id);
+  if (index !== -1) {
+    if (!currentUserId || !stored[index].userId || stored[index].userId === currentUserId || stored[index].ownerUserId === currentUserId) {
+      stored[index].enabled = !stored[index].enabled;
+      stored[index].updatedAt = new Date().toISOString();
+      saveSources(stored);
+    }
+  }
+  return getSources(currentUserId);
 }
 
 // Demo mode configuration
@@ -296,18 +433,42 @@ export function getJobById(jobId) {
   return jobs.find((j) => j.id === jobId) || null;
 }
 
-export function getSavedJobs() {
-  return getJobs().filter((j) => j.status === 'saved');
+export function getSavedJobs(userId = null) {
+  const uid = userId || getCurrentUserId();
+  const savedIds = new Set(getUserSavedJobIds(uid));
+  const jobs = getJobs();
+  const userSavedJobs = jobs.filter(
+    (j) => savedIds.has(String(j.id)) || (uid === 'user-default' && j.status === 'saved')
+  );
+
+  // Also include any saved applications that might not be in getJobs()
+  const allApps = getItem(STORAGE_KEYS.APPLICATIONS) || [];
+  allApps.forEach((a) => {
+    const appUid = a.userId || 'user-default';
+    if ((appUid === uid || (!a.userId && uid === 'user-default')) && (a.status || '').toLowerCase() === 'saved') {
+      if (a.jobId && !userSavedJobs.some((j) => String(j.id) === String(a.jobId))) {
+        userSavedJobs.push({
+          id: a.jobId,
+          title: a.title,
+          company: a.company,
+          platform: a.platform,
+          sourceUrl: a.sourceUrl,
+          status: 'saved',
+          matchScore: a.matchScore,
+        });
+      }
+    }
+  });
+
+  return userSavedJobs;
 }
 
-export function updateJobStatus(jobId, status) {
-  const jobs = getJobs();
-  const index = jobs.findIndex((j) => j.id === jobId);
-  if (index !== -1) {
-    jobs[index].status = status;
-    saveJobs(jobs);
+export function updateJobStatus(jobId, status, userId = null) {
+  const uid = userId || getCurrentUserId();
+  if (jobId && status) {
+    setUserJobState(jobId, status, uid);
   }
-  return jobs;
+  return getJobs();
 }
 
 // Posts
@@ -357,18 +518,30 @@ export function getApplications(userId = null) {
   const all = getItem(STORAGE_KEYS.APPLICATIONS) || [];
   const uid = userId || getCurrentUserId();
   if (uid && uid !== 'user-default') {
-    return all.filter((a) => !a.userId || a.userId === uid || a.userId === 'user-default');
+    return all.filter((a) => a.userId === uid);
   }
-  return all;
+  return all.filter((a) => !a.userId || a.userId === 'user-default');
 }
 
 export function saveApplications(apps) {
-  setItem(STORAGE_KEYS.APPLICATIONS, apps);
+  const currentUid = getCurrentUserId();
+  const safeApps = Array.isArray(apps) ? apps : [];
+  const normalized = safeApps.map((a) => {
+    if (!a) return a;
+    if (!a.userId && currentUid && currentUid !== 'user-default') {
+      return { ...a, userId: currentUid };
+    }
+    return a;
+  });
+  setItem(STORAGE_KEYS.APPLICATIONS, normalized);
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new CustomEvent('tf_applications_changed', { detail: { apps: normalized } }));
+  }
 }
 
 export function getCurrentUserId() {
   const auth = getAuth();
-  if (auth && auth.isAuthenticated && (auth.phone || auth.userId)) {
+  if (auth && auth.isAuthenticated && (auth.userId || auth.phone)) {
     return auth.userId || auth.phone;
   }
   const user = getItem(STORAGE_KEYS.USER);
@@ -378,14 +551,133 @@ export function getCurrentUserId() {
   return 'user-default';
 }
 
+// User-Scoped Job Lifecycle State Management
+export function getUserJobStates(userId = null) {
+  const uid = userId || getCurrentUserId();
+  const key = `tf_user_job_states_${uid}`;
+  return getItem(key) || {};
+}
+
+export function getUserJobState(jobId, userId = null) {
+  if (!jobId) return 'feed';
+  const uid = userId || getCurrentUserId();
+  const strId = String(jobId);
+  const states = getUserJobStates(uid);
+  if (states[strId]) {
+    return states[strId];
+  }
+
+  // Check user applications fallback
+  const allApps = getItem(STORAGE_KEYS.APPLICATIONS) || [];
+  const userApp = allApps.find(
+    (a) => String(a.jobId) === strId && (a.userId === uid || (!a.userId && uid === 'user-default'))
+  );
+  if (userApp && userApp.status) {
+    return userApp.status.toLowerCase();
+  }
+
+  // Check legacy applied list
+  const userStoreKey = `tf_user_applied_${uid}`;
+  const appliedList = getItem(userStoreKey) || [];
+  if (appliedList.includes(strId)) {
+    return 'applied';
+  }
+
+  return 'feed';
+}
+
+export function setUserJobState(jobId, state, userId = null) {
+  if (!jobId) return;
+  const uid = userId || getCurrentUserId();
+  const strId = String(jobId);
+  const normalizedState = (state || 'feed').toLowerCase();
+  const key = `tf_user_job_states_${uid}`;
+  const states = getItem(key) || {};
+
+  if (normalizedState === 'feed' || normalizedState === 'discovered') {
+    delete states[strId];
+  } else {
+    states[strId] = normalizedState;
+  }
+  setItem(key, states);
+
+  // Sync with applied set
+  const userAppliedKey = `tf_user_applied_${uid}`;
+  const appliedList = getItem(userAppliedKey) || [];
+  if (normalizedState === 'applied') {
+    if (!appliedList.includes(strId)) {
+      appliedList.push(strId);
+      setItem(userAppliedKey, appliedList);
+    }
+  } else {
+    if (appliedList.includes(strId)) {
+      setItem(userAppliedKey, appliedList.filter((id) => id !== strId));
+    }
+  }
+
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(
+      new CustomEvent('tf_job_state_changed', {
+        detail: { jobId: strId, state: normalizedState, userId: uid },
+      })
+    );
+  }
+}
+
+export function getUserSavedJobIds(userId = null) {
+  const uid = userId || getCurrentUserId();
+  const savedSet = new Set();
+  const states = getUserJobStates(uid);
+  Object.entries(states).forEach(([jid, st]) => {
+    if (st === 'saved') savedSet.add(String(jid));
+  });
+  const allApps = getApplications(uid);
+  allApps.forEach((a) => {
+    if ((a.status || '').toLowerCase() === 'saved') {
+      if (a.jobId) savedSet.add(String(a.jobId));
+    }
+  });
+  return Array.from(savedSet);
+}
+
+export function getUserDraftJobIds(userId = null) {
+  const uid = userId || getCurrentUserId();
+  const draftSet = new Set();
+  const states = getUserJobStates(uid);
+  Object.entries(states).forEach(([jid, st]) => {
+    if (st === 'draft') draftSet.add(String(jid));
+  });
+  const allApps = getApplications(uid);
+  allApps.forEach((a) => {
+    if ((a.status || '').toLowerCase() === 'draft') {
+      if (a.jobId) draftSet.add(String(a.jobId));
+    }
+  });
+  return Array.from(draftSet);
+}
+
+export function getUserSkippedJobIds(userId = null) {
+  const uid = userId || getCurrentUserId();
+  const skippedSet = new Set();
+  const states = getUserJobStates(uid);
+  Object.entries(states).forEach(([jid, st]) => {
+    if (st === 'skipped') skippedSet.add(String(jid));
+  });
+  return Array.from(skippedSet);
+}
+
 export function getUserAppliedJobIds(userId = null) {
   const uid = userId || getCurrentUserId();
   const appliedSet = new Set();
 
-  const apps = getApplications();
+  const states = getUserJobStates(uid);
+  Object.entries(states).forEach(([jid, st]) => {
+    if (st === 'applied') appliedSet.add(String(jid));
+  });
+
+  const apps = getApplications(uid);
   apps.forEach((a) => {
-    const appUid = a.userId || 'user-default';
-    if (appUid === uid && a.status && a.status !== 'draft' && a.status !== 'saved') {
+    if (a.status && a.status !== 'draft' && a.status !== 'saved') {
       if (a.jobId) appliedSet.add(String(a.jobId));
     }
   });
@@ -397,21 +689,35 @@ export function getUserAppliedJobIds(userId = null) {
   return Array.from(appliedSet);
 }
 
+export function recordJobView(jobId, userId = null) {
+  if (!jobId) return;
+  const uid = userId || getCurrentUserId();
+  const key = `tf_user_viewed_${uid}`;
+  const viewedList = getItem(key) || [];
+  const strId = String(jobId);
+  if (!viewedList.includes(strId)) {
+    viewedList.push(strId);
+    setItem(key, viewedList);
+  }
+}
+
+export function getUserViewedJobIds(userId = null) {
+  const uid = userId || getCurrentUserId();
+  const key = `tf_user_viewed_${uid}`;
+  return getItem(key) || [];
+}
+
 export function setUserJobApplied(jobId, userId = null) {
   if (!jobId) return;
   const uid = userId || getCurrentUserId();
-  const userStoreKey = `tf_user_applied_${uid}`;
-  const storedList = getItem(userStoreKey) || [];
-  const strId = String(jobId);
-  if (!storedList.includes(strId)) {
-    storedList.push(strId);
-    setItem(userStoreKey, storedList);
-  }
+  setUserJobState(jobId, 'applied', uid);
 }
 
 export function isJobAppliedByUser(jobId, userId = null) {
   if (!jobId) return false;
   const uid = userId || getCurrentUserId();
+  const state = getUserJobState(jobId, uid);
+  if (state === 'applied') return true;
   const appliedIds = getUserAppliedJobIds(uid);
   return appliedIds.includes(String(jobId));
 }
@@ -422,13 +728,18 @@ export function addApplication(app) {
     ...app,
     userId: currentUid,
   };
-  const apps = getApplications();
-  const existingIndex = apps.findIndex(
-    (a) => a.id === appWithUser.id || (a.jobId && a.jobId === appWithUser.jobId && (!a.userId || a.userId === currentUid))
+  const all = getItem(STORAGE_KEYS.APPLICATIONS) || [];
+  const existingIndex = all.findIndex(
+    (a) =>
+      a.id === appWithUser.id ||
+      (a.jobId &&
+        String(a.jobId) === String(appWithUser.jobId) &&
+        (a.userId === currentUid || (!a.userId && currentUid === 'user-default')))
   );
+
   if (existingIndex !== -1) {
     // Preserve history when updating
-    const existing = apps[existingIndex];
+    const existing = all[existingIndex];
     const statusHistory = existing.statusHistory || [];
     if (appWithUser.status && appWithUser.status !== existing.status) {
       statusHistory.unshift({
@@ -437,24 +748,52 @@ export function addApplication(app) {
         note: `Status changed to ${appWithUser.status}`,
       });
     }
-    apps[existingIndex] = { ...existing, ...appWithUser, statusHistory };
+    all[existingIndex] = {
+      ...existing,
+      ...appWithUser,
+      statusHistory,
+      updatedAt: new Date().toISOString(),
+    };
   } else {
-    apps.unshift(appWithUser);
+    all.unshift(appWithUser);
   }
-  saveApplications(apps);
+  setItem(STORAGE_KEYS.APPLICATIONS, all);
 
-  if (appWithUser.status && appWithUser.status !== 'draft' && appWithUser.status !== 'saved') {
-    setUserJobApplied(appWithUser.jobId, currentUid);
+  if (appWithUser.jobId && appWithUser.status) {
+    setUserJobState(appWithUser.jobId, appWithUser.status, currentUid);
   }
 
-  return apps;
+  // Live Sync with server backend database
+  try {
+    const auth = getAuth() || {};
+    const token = auth.token;
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (currentUid && currentUid !== 'user-default') headers['x-user-id'] = currentUid;
+
+    fetch(getApiUrl('/applications'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(appWithUser),
+    }).catch(() => {});
+  } catch {}
+
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(
+      new CustomEvent('tf_applications_changed', {
+        detail: { app: appWithUser, userId: currentUid },
+      })
+    );
+  }
+
+  return getApplications(currentUid);
 }
 
 export function updateApplication(id, updates) {
-  const apps = getApplications();
-  const index = apps.findIndex((a) => a.id === id);
+  const all = getItem(STORAGE_KEYS.APPLICATIONS) || [];
+  const index = all.findIndex((a) => a.id === id);
   if (index !== -1) {
-    const existing = apps[index];
+    const existing = all[index];
     let statusHistory = [...(existing.statusHistory || [])];
 
     if (updates.status && updates.status !== existing.status) {
@@ -465,28 +804,65 @@ export function updateApplication(id, updates) {
       });
     }
 
-    apps[index] = {
+    all[index] = {
       ...existing,
       ...updates,
       statusHistory,
       updatedAt: new Date().toISOString(),
     };
-    saveApplications(apps);
+    setItem(STORAGE_KEYS.APPLICATIONS, all);
+
+    if (all[index].jobId && updates.status) {
+      setUserJobState(all[index].jobId, updates.status, all[index].userId || getCurrentUserId());
+    }
+
+    // Live Sync with server backend database
+    try {
+      const auth = getAuth() || {};
+      const token = auth.token;
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const uid = all[index]?.userId || getCurrentUserId();
+      if (uid && uid !== 'user-default') headers['x-user-id'] = uid;
+
+      fetch(getApiUrl('/applications'), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(all[index]),
+      }).catch(() => {});
+    } catch {}
+
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(
+        new CustomEvent('tf_applications_changed', { detail: { id, updates } })
+      );
+    }
   }
-  return apps;
+  return getApplications();
 }
 
 export function deleteApplication(id) {
-  const apps = getApplications();
-  const target = apps.find((a) => a.id === id);
+  const all = getItem(STORAGE_KEYS.APPLICATIONS) || [];
+  const target = all.find((a) => a.id === id);
   if (!target) return false;
 
-  const filtered = apps.filter((a) => a.id !== id);
-  saveApplications(filtered);
+  const filtered = all.filter((a) => a.id !== id);
+  setItem(STORAGE_KEYS.APPLICATIONS, filtered);
+
+  if (target.jobId) {
+    setUserJobState(target.jobId, 'feed', target.userId || getCurrentUserId());
+  }
 
   // Archive safety: preserve in trash
   const trash = getItem(STORAGE_KEYS.APPLICATIONS_TRASH) || [];
   setItem(STORAGE_KEYS.APPLICATIONS_TRASH, [{ ...target, deletedAt: new Date().toISOString() }, ...trash].slice(0, 100));
+
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(
+      new CustomEvent('tf_applications_changed', { detail: { deletedId: id } })
+    );
+  }
+
   return true;
 }
 
@@ -509,12 +885,20 @@ export function cleanupOldApplications(force = false) {
     return { deletedCount: 0, removedApps: [] };
   }
 
-  const apps = getApplications();
+  const all = getItem(STORAGE_KEYS.APPLICATIONS) || [];
+  const uid = getCurrentUserId();
   const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
   const remaining = [];
   const removed = [];
 
-  apps.forEach((app) => {
+  all.forEach((app) => {
+    // Only cleanup applications belonging to current user (or default user)
+    const appUid = app.userId || 'user-default';
+    if (uid && uid !== 'user-default' && appUid !== uid && appUid !== 'user-default') {
+      remaining.push(app);
+      return;
+    }
+
     const status = (app.status || '').toLowerCase();
     const isProtected = PROTECTED_APPLICATION_STATUSES.includes(status);
 
@@ -529,6 +913,9 @@ export function cleanupOldApplications(force = false) {
 
     if (isOlderThan7Days) {
       removed.push({ ...app, deletedAt: new Date().toISOString() });
+      if (app.jobId) {
+        setUserJobState(app.jobId, 'feed', appUid);
+      }
     } else {
       remaining.push(app);
     }
@@ -806,8 +1193,15 @@ export function getLeadById(id) {
   return getLeads().find((l) => l.id === id) || null;
 }
 
-export function getAutopilotSettings() {
-  const settings = getItem(STORAGE_KEYS.AUTOPILOT_SETTINGS);
+export function getAutopilotSettings(userId = null) {
+  const uid = userId || getCurrentUserId();
+  let settings = null;
+  if (uid && uid !== 'user-default') {
+    settings = getItem(`tf_autopilot_${uid}`);
+  }
+  if (!settings && (!uid || uid === 'user-default')) {
+    settings = getItem(STORAGE_KEYS.AUTOPILOT_SETTINGS);
+  }
   if (!settings) {
     return {
       status: 'paused',
@@ -843,7 +1237,11 @@ export function getAutopilotSettings() {
   return settings;
 }
 
-export function saveAutopilotSettings(settings) {
+export function saveAutopilotSettings(settings, userId = null) {
+  const uid = userId || getCurrentUserId();
+  if (uid && uid !== 'user-default') {
+    setItem(`tf_autopilot_${uid}`, settings);
+  }
   setItem(STORAGE_KEYS.AUTOPILOT_SETTINGS, settings);
 }
 
@@ -1014,7 +1412,7 @@ export function saveWorkspaces(workspaces) {
   setItem(STORAGE_KEYS.WORKSPACES, workspaces);
 }
 
-export function getUserPreferences() {
+export function getUserPreferences(userId = null) {
   const defaultPrefs = {
     preferredRoles: ['Video Editor', 'Motion Designer'],
     preferredSkills: ['Premiere Pro', 'After Effects'],
@@ -1172,16 +1570,17 @@ export function deleteAccount() {
  */
 export function getStoredSubscription(userId = null) {
   const uid = userId || getCurrentUserId();
-  const key = `tf_sub_${uid}`;
-  const sub = getItem(key);
-  if (sub) return sub;
+  if (uid && uid !== 'user-default') {
+    return getItem(`tf_sub_${uid}`);
+  }
   return getItem(STORAGE_KEYS.SUBSCRIPTION);
 }
 
 export function setStoredSubscription(sub, userId = null) {
   const uid = userId || getCurrentUserId();
-  const key = `tf_sub_${uid}`;
-  setItem(key, sub);
+  if (uid && uid !== 'user-default') {
+    setItem(`tf_sub_${uid}`, sub);
+  }
   setItem(STORAGE_KEYS.SUBSCRIPTION, sub);
 }
 
@@ -1198,6 +1597,18 @@ export function setStoredDailyUsage(usage, userId = null) {
   const key = `tf_daily_usage_${uid}`;
   setItem(key, usage);
   setItem(STORAGE_KEYS.DAILY_USAGE, usage);
+}
+
+export function getStoredQuotaWindow(userId = null) {
+  const uid = userId || getCurrentUserId();
+  const key = `tf_quota_window_${uid}`;
+  return getItem(key);
+}
+
+export function setStoredQuotaWindow(quota, userId = null) {
+  const uid = userId || getCurrentUserId();
+  const key = `tf_quota_window_${uid}`;
+  setItem(key, quota);
 }
 
 export function getStoredCurrency() {

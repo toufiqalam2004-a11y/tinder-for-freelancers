@@ -31,6 +31,8 @@ import {
   getAutopilotSettings,
   saveAutopilotSettings,
   resetAutopilotSetup,
+  getAutoDeletePreference,
+  setAutoDeletePreference,
 } from '../data/storage.js';
 import Modal from '../components/Modal';
 import { APP_CONFIG } from '../utils/constants';
@@ -60,6 +62,25 @@ const Settings = () => {
   const [autopilotSettings, setAutopilotSettings] = useState(() => getAutopilotSettings());
   const [showAboutModal, setShowAboutModal] = useState(false);
   const [showResetAutopilotModal, setShowResetAutopilotModal] = useState(false);
+
+  const isPlusOrPro = subscriptionService.isPlus() || subscriptionService.isPro();
+  const [autoDeleteEnabled, setAutoDeleteEnabled] = useState(() => {
+    try {
+      return Boolean(getAutoDeletePreference());
+    } catch {
+      return false;
+    }
+  });
+
+  const handleToggleAutoDelete = (val) => {
+    if (!isPlusOrPro) {
+      toast.error('Auto-delete is available only on Plus and Pro plans.', { icon: '🔒' });
+      return;
+    }
+    setAutoDeletePreference(val);
+    setAutoDeleteEnabled(val);
+    toast.success(`Auto-delete ${val ? 'enabled (7 days)' : 'disabled'}.`);
+  };
 
   // Autopilot settings update handler
   const handleUpdateAutopilotSetting = (key, value) => {
@@ -815,6 +836,56 @@ const Settings = () => {
                 <Button variant="secondary" size="sm" onClick={handleClearHistory} icon={<RefreshCw size={14} />}>
                   Clear History
                 </Button>
+              </div>
+
+              <div className="pt-3 border-t border-border">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="font-bold text-text-primary flex items-center gap-1.5">
+                    <span>Auto-delete applications (7 days)</span>
+                    {!isPlusOrPro && (
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                        PLUS & PRO ONLY
+                      </span>
+                    )}
+                  </div>
+                  {isPlusOrPro ? (
+                    <div className="flex items-center bg-surface border border-border rounded-xl p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleAutoDelete(false)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                          !autoDeleteEnabled ? 'bg-text-secondary text-white shadow-xs' : 'text-text-muted hover:text-text-primary'
+                        }`}
+                      >
+                        OFF
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleAutoDelete(true)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                          autoDeleteEnabled ? 'bg-primary text-white shadow-xs' : 'text-text-muted hover:text-text-primary'
+                        }`}
+                      >
+                        ON
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        toast('Upgrade to Plus or Pro to unlock automatic application cleanup.', { icon: '⭐' });
+                        navigate('/membership');
+                      }}
+                      className="text-xs font-bold text-primary hover:underline flex items-center gap-1"
+                    >
+                      <Lock size={12} />
+                      <span>Upgrade</span>
+                    </button>
+                  )}
+                </div>
+                <p className="text-text-muted text-[11px]">
+                  Automatically remove applications inactive for 7 days. Active stages (Interview, Shortlisted, Hired) are always preserved.
+                </p>
               </div>
 
               <div className="pt-3 border-t border-border">

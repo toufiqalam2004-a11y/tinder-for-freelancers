@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Sparkles,
@@ -29,11 +29,13 @@ import Modal from '../components/Modal';
 import JobCard from '../components/JobCard';
 import UpgradeModal from '../components/UpgradeModal';
 import { subscriptionService } from '../services/subscriptionService';
+import { getApiUrl } from '../config/apiConfig.js';
 
 import { useProfile } from '../contexts/ProfileContext';
 import { useSources } from '../contexts/SourcesContext';
 import {
   getJobs,
+  saveJobs,
   updateJobStatus,
   addJob,
   isDemoMode,
@@ -50,6 +52,9 @@ import {
   setUserJobApplied,
   getCurrentUserId,
   isJobAppliedByUser,
+  getUserJobState,
+  setUserJobState,
+  getUserSavedJobIds,
 } from '../data/storage.js';
 import { DEMO_SAMPLE_POSTS, processPostToJob } from '../services/jobClassifier.js';
 import { createPost, createSavedSearch, createNotification, createApplication } from '../data/models.js';
@@ -101,6 +106,7 @@ const Jobs = () => {
   const [showSavedSearchModal, setShowSavedSearchModal] = useState(false);
   const [newSearchName, setNewSearchName] = useState('');
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [upgradeTitle, setUpgradeTitle] = useState('Upgrade Membership');
   const [upgradeReason, setUpgradeReason] = useState('');
 
   const demoActive = isDemoMode();
@@ -139,9 +145,65 @@ const Jobs = () => {
     }
   }, [demoActive, profile]);
 
+  // Sync jobs from server API on mount
+  useEffect(() => {
+    let isMounted = true;
+    async function syncBackendJobs() {
+      try {
+        const token = localStorage.getItem('tf_auth_token');
+        const res = await fetch(getApiUrl('/jobs'), {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && Array.isArray(data.jobs) && data.jobs.length > 0) {
+            const current = getJobs();
+            const existingIds = new Set(current.map((j) => String(j.id)));
+            let modified = false;
+            for (const j of data.jobs) {
+              if (!existingIds.has(String(j.id))) {
+                current.push(j);
+                existingIds.add(String(j.id));
+                modified = true;
+              }
+            }
+            if (modified) {
+              saveJobs(current);
+              if (isMounted) {
+                setJobs([...current]);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to sync backend jobs', err);
+      }
+    }
+    syncBackendJobs();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const [isApplying, setIsApplying] = useState(false);
+  const applyingJobIdsRef = useRef(new Set());
   const [isRefilling, setIsRefilling] = useState(false);
-  const [isPro, setIsPro] = useState(() => featureAccess.isProEnabled());
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const lastRefreshTimeRef = useRef(0);
+
+  const handleManualRefresh = async () => {
+    const now = Date.now();
+    if (now - lastRefreshTimeRef.current < 1500 || isRefreshing) return;
+    lastRefreshTimeRef.current = now;
+    setIsRefreshing(true);
+    try {
+      await refillFeed();
+      refreshJobs();
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 500);
+    }
+  };
+  const [isPro, setIsPro] = useState(() => subscriptionService.isPro() || featureAccess.isProEnabled());
 
   useEffect(() => {
     const handleSubChanged = (e) => {
@@ -244,17 +306,42 @@ const Jobs = () => {
     refreshJobs();
   }, [refreshJobs]);
 
+  useEffect(() => {
+    const handleStateUpdate = () => {
+      refreshJobs();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('tf_job_state_changed', handleStateUpdate);
+      window.addEventListener('tf_applications_changed', handleStateUpdate);
+      return () => {
+        window.removeEventListener('tf_job_state_changed', handleStateUpdate);
+        window.removeEventListener('tf_applications_changed', handleStateUpdate);
+      };
+    }
+  }, [refreshJobs]);
+
   const currentUserId = profile?.id || getCurrentUserId();
   const userAppliedIds = useMemo(() => new Set(getUserAppliedJobIds(currentUserId)), [currentUserId, jobs]);
+  const userSavedIds = useMemo(() => new Set(getUserSavedJobIds(currentUserId)), [currentUserId, jobs]);
 
   // Comprehensive Multi-Filter & Sort Pipeline
   const filteredJobs = useMemo(() => {
     let result = jobs.filter((j) => {
+      const userJobState = getUserJobState(j.id, currentUserId);
+
       // Platform filter
       if (activePlatformFilter === 'saved') {
-        if (j.status !== 'saved') return false;
+        if (userJobState !== 'saved' && !userSavedIds.has(String(j.id))) return false;
       } else {
-        if (j.status === 'skipped') return false;
+        // Active feed: MUST EXCLUDE any job that is saved, draft, applied, or skipped for this user
+        if (
+          userJobState === 'saved' ||
+          userJobState === 'draft' ||
+          userJobState === 'applied' ||
+          userJobState === 'skipped'
+        ) {
+          return false;
+        }
         // User-scoped applied filter: applied jobs are excluded only for this user
         if (userAppliedIds.has(String(j.id)) || isJobAppliedByUser(j.id, currentUserId)) return false;
         if (activePlatformFilter !== 'all' && j.platform !== activePlatformFilter) return false;
@@ -336,7 +423,7 @@ const Jobs = () => {
     });
 
     return result;
-  }, [jobs, activePlatformFilter, remoteFilter, jobTypeFilter, matchScoreFilter, categoryFilter, sortBy, quickApplyActive, profile?.userPreferences?.minMatchScore, userAppliedIds, currentUserId]);
+  }, [jobs, activePlatformFilter, remoteFilter, jobTypeFilter, matchScoreFilter, categoryFilter, sortBy, quickApplyActive, profile?.userPreferences?.minMatchScore, userAppliedIds, userSavedIds, currentUserId]);
 
 
   // Bound index safely
@@ -346,8 +433,10 @@ const Jobs = () => {
 
   // Actions with Personalization Event Logging
   const handleSkip = (job) => {
-    if (!job) return;
-    updateJobStatus(job.id, 'skipped');
+    if (!job || !job.id) return;
+    const currentUid = profile?.id || getCurrentUserId();
+    setUserJobState(job.id, 'skipped', currentUid);
+    updateJobStatus(job.id, 'skipped', currentUid);
     logUserEvent('job_skipped', {
       jobId: job.id,
       jobTitle: job.title,
@@ -357,14 +446,33 @@ const Jobs = () => {
       remote: job.remote,
       requiredSkills: job.requiredSkills,
     });
-    setHistory((prev) => [...prev, { job, previousStatus: job.status, action: 'skipped' }]);
+    setHistory((prev) => [...prev, { job, previousStatus: 'feed', action: 'skipped' }]);
     toast('Skipped', { icon: '⏭️', duration: 1500 });
     refreshJobs();
   };
 
   const handleSave = (job) => {
-    if (!job) return;
-    updateJobStatus(job.id, 'saved');
+    if (!job || !job.id) return;
+    const currentUid = profile?.id || getCurrentUserId();
+
+    // 1. Set user-scoped state to 'saved'
+    setUserJobState(job.id, 'saved', currentUid);
+    updateJobStatus(job.id, 'saved', currentUid);
+
+    // 2. Add or update application record with status 'saved'
+    const app = createApplication({
+      jobId: job.id,
+      userId: currentUid,
+      title: job.title,
+      company: job.company || job.author,
+      platform: job.platform,
+      sourceUrl: job.sourceUrl || job.postUrl,
+      status: 'saved',
+      matchScore: job.matchScore,
+      matchReasons: job.matchReasons,
+    });
+    addApplication(app);
+
     logUserEvent('job_saved', {
       jobId: job.id,
       jobTitle: job.title,
@@ -374,7 +482,7 @@ const Jobs = () => {
       remote: job.remote,
       requiredSkills: job.requiredSkills,
     });
-    setHistory((prev) => [...prev, { job, previousStatus: job.status, action: 'saved' }]);
+    setHistory((prev) => [...prev, { job, previousStatus: 'feed', action: 'saved' }]);
     toast.success('Job saved to your collection!');
     if (viewMode === 'swipe') {
       setCurrentIndex((prev) => prev + 1);
@@ -383,42 +491,60 @@ const Jobs = () => {
   };
 
   const handleApply = async (job) => {
-    if (!job || isApplying) return;
+    if (!job || !job.id) return;
+    if (applyingJobIdsRef.current.has(job.id)) return;
 
-    logUserEvent('job_applied', {
-      jobId: job.id,
-      jobTitle: job.title,
-      platform: job.platform,
-      jobRole: job.jobRole,
-      jobType: job.jobType,
-      remote: job.remote,
-      requiredSkills: job.requiredSkills,
-    });
-
-    const outreachPrefs = profile?.outreachPreferences || getOutreachPreferences();
-    const quickApplyActive = isPro && outreachPrefs?.quickApplyEnabled;
-
-    if (!quickApplyActive) {
-      // Normal flow: navigate to manual application screen
-      navigate(`/apply/${job.id}`);
+    const currentUid = profile?.id || getCurrentUserId();
+    if (isJobAppliedByUser(job.id, currentUid)) {
+      toast('You already applied to this opportunity.', { icon: 'ℹ️' });
       return;
     }
 
-    // Pro Quick Apply / Auto Outreach Flow
+    applyingJobIdsRef.current.add(job.id);
     setIsApplying(true);
-    const loadingToast = toast.loading('Personalizing & dispatching AI application...');
 
     try {
-      // Check quota
+      const liveIsPro = subscriptionService.isPro() || featureAccess.isProEnabled() || isPro;
+      if (liveIsPro && !isPro) setIsPro(true);
+
+      logUserEvent('job_applied', {
+        jobId: job.id,
+        jobTitle: job.title,
+        platform: job.platform,
+        jobRole: job.jobRole,
+        jobType: job.jobType,
+        remote: job.remote,
+        requiredSkills: job.requiredSkills,
+      });
+
+      // 1. Quota Pre-Check
       const quotaCheck = usageService.canApply();
       if (!quotaCheck.allowed) {
-        toast.dismiss(loadingToast);
-        setUpgradeReason(quotaCheck.reason || 'Daily application limit reached.');
-        setShowUpgradeModal(true);
-        toast.error('Daily application limit reached.');
-        setIsApplying(false);
+        if (liveIsPro) {
+          // PRO user: DO NOT show "Upgrade to Pro" or upgrade modal!
+          // Show quota exhausted message with refill countdown
+          toast.error(quotaCheck.reason || 'Application quota exhausted. Next refill in 8 hours.', { duration: 4500 });
+        } else {
+          // Free or Plus user: Suggest upgrading to increase quota
+          setUpgradeTitle('Application Limit Reached');
+          setUpgradeReason(quotaCheck.reason || 'Application limit reached. Upgrade to Plus or Pro for more applications.');
+          setShowUpgradeModal(true);
+          toast.error(quotaCheck.reason || 'Daily application limit reached.');
+        }
         return;
       }
+
+      const outreachPrefs = profile?.outreachPreferences || getOutreachPreferences();
+      const quickApplyActive = liveIsPro && Boolean(outreachPrefs?.quickApplyEnabled);
+
+      if (!quickApplyActive) {
+        // Normal flow / Approval mode: navigate to manual application screen
+        navigate(`/apply/${job.id}`);
+        return;
+      }
+
+      // Pro Quick Apply / Auto Outreach Flow
+      const loadingToast = toast.loading('Personalizing & dispatching AI application...');
 
       const result = await outreachService.executeAutoOutreach({
         job,
@@ -429,10 +555,15 @@ const Jobs = () => {
       toast.dismiss(loadingToast);
 
       if (result.code === 'PRO_REQUIRED' || result.status === 'NOT_AUTHORIZED') {
-        setIsPro(false);
-        setUpgradeReason(result.error || 'Quick Apply and Auto Outreach are available exclusively for PRO members.');
-        setShowUpgradeModal(true);
-        toast.error('Quick Apply requires PRO membership.');
+        if (subscriptionService.isPro()) {
+          await subscriptionService.syncWithServer(subscriptionService.getSubscription()).catch(() => {});
+        } else {
+          setIsPro(false);
+          setUpgradeTitle('Pro Membership Required');
+          setUpgradeReason(result.error || 'Quick Apply and Auto Outreach are available exclusively for PRO members.');
+          setShowUpgradeModal(true);
+          toast.error('Quick Apply requires PRO membership.');
+        }
         return;
       }
 
@@ -452,9 +583,15 @@ const Jobs = () => {
       }
 
       if (result.code === 'RATE_LIMIT' || result.status === 'RATE_LIMIT') {
-        setUpgradeReason(result.error || 'Daily application limit reached.');
-        setShowUpgradeModal(true);
-        toast.error('Daily application limit reached.');
+        if (liveIsPro) {
+          // PRO user: DO NOT show upgrade modal!
+          toast.error(result.error || 'Application quota exhausted.', { duration: 4500 });
+        } else {
+          setUpgradeTitle('Application Limit Reached');
+          setUpgradeReason(result.error || 'Daily application limit reached.');
+          setShowUpgradeModal(true);
+          toast.error('Daily application limit reached.');
+        }
         return;
       }
 
@@ -483,7 +620,7 @@ const Jobs = () => {
       ) {
         const isDemo = result.status === 'DEMO_SENT' || result.code === 'DEMO_SENT' || !!result.demo;
 
-        // Successful real dispatch
+        // Consume exactly 1 application entitlement
         try {
           usageService.consumeApplication();
         } catch (e) {
@@ -492,7 +629,7 @@ const Jobs = () => {
 
         const app = createApplication({
           jobId: job.id,
-          userId: currentUserId,
+          userId: currentUid,
           title: job.title,
           company: job.company || job.author,
           platform: job.platform,
@@ -513,8 +650,9 @@ const Jobs = () => {
         });
 
         addApplication(app);
-        setUserJobApplied(job.id, currentUserId);
-        setHistory((prev) => [...prev, { job, previousStatus: job.status, action: 'applied' }]);
+        setUserJobApplied(job.id, currentUid);
+        setUserJobState(job.id, 'applied', currentUid);
+        setHistory((prev) => [...prev, { job, previousStatus: 'feed', action: 'applied' }]);
 
         if (isDemo) {
           toast.custom(
@@ -558,10 +696,10 @@ const Jobs = () => {
         toast.error(result.error || 'Application could not be sent. Please try again.');
       }
     } catch (err) {
-      toast.dismiss(loadingToast);
       toast.error(err.message || 'Application could not be sent. Please try again.');
     } finally {
       setIsApplying(false);
+      applyingJobIdsRef.current.delete(job.id);
     }
   };
 
@@ -569,7 +707,9 @@ const Jobs = () => {
   const handleUndo = () => {
     if (history.length === 0) return;
     const last = history[history.length - 1];
-    updateJobStatus(last.job.id, last.previousStatus || 'discovered');
+    const currentUid = profile?.id || getCurrentUserId();
+    setUserJobState(last.job.id, 'feed', currentUid);
+    updateJobStatus(last.job.id, last.previousStatus || 'discovered', currentUid);
     setHistory((prev) => prev.slice(0, -1));
     if (viewMode === 'swipe' && currentIndex > 0) {
       setCurrentIndex((prev) => Math.max(0, prev - 1));
@@ -579,7 +719,10 @@ const Jobs = () => {
   };
 
   const handleDirectUndo = (job) => {
-    updateJobStatus(job.id, 'discovered');
+    if (!job || !job.id) return;
+    const currentUid = profile?.id || getCurrentUserId();
+    setUserJobState(job.id, 'feed', currentUid);
+    updateJobStatus(job.id, 'discovered', currentUid);
     toast.success('Job restored to feed');
     refreshJobs();
   };
@@ -600,8 +743,18 @@ const Jobs = () => {
             <h1 className="text-2xl font-bold mt-0.5 text-text-primary">{profile?.name || 'Toufiq'}</h1>
           </div>
 
-          {/* Mode Switcher: Swipe Deck vs List */}
+          {/* Mode Switcher: Swipe Deck vs List & Refresh */}
           <div className="flex items-center gap-1.5">
+            <button
+              onClick={handleManualRefresh}
+              disabled={isRefreshing || isRefilling}
+              className="p-2 rounded-xl border border-border bg-surface-hover text-text-secondary hover:text-text-primary transition-all disabled:opacity-50"
+              title="Refresh jobs"
+              aria-label="Refresh jobs"
+            >
+              <RefreshCw size={17} className={isRefreshing || isRefilling ? "animate-spin text-primary" : ""} />
+            </button>
+
             <button
               onClick={() => setShowFilterDrawer(!showFilterDrawer)}
               className={`p-2 rounded-xl border transition-all relative ${
@@ -744,6 +897,7 @@ const Jobs = () => {
                     onClick={() => {
                       const check = subscriptionService.canSaveSearch(savedSearches.length);
                       if (!check.allowed) {
+                        setUpgradeTitle('Saved Search Limit');
                         setUpgradeReason(check.reason);
                         setShowUpgradeModal(true);
                         return;
@@ -1117,7 +1271,7 @@ const Jobs = () => {
       <UpgradeModal
         isOpen={showUpgradeModal}
         onClose={() => setShowUpgradeModal(false)}
-        title="Saved Search Limit"
+        title={upgradeTitle || "Upgrade Membership"}
         message={upgradeReason}
       />
     </PageTransition>

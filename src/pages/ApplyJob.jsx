@@ -21,6 +21,7 @@ import {
   Square,
   ChevronDown,
   ChevronUp,
+  Lock,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -31,10 +32,11 @@ import Modal from '../components/Modal';
 import UpgradeModal from '../components/UpgradeModal';
 import { useProfile } from '../contexts/ProfileContext';
 import { createApplication } from '../data/models.js';
-import { addApplication, updateJobStatus, getJobById, getApplicationByJobId, setUserJobApplied, getCurrentUserId } from '../data/storage.js';
+import { addApplication, updateJobStatus, getJobById, getApplicationByJobId, setUserJobApplied, getCurrentUserId, setUserJobState } from '../data/storage.js';
 import { aiService } from '../services/aiService';
 import { usageService } from '../services/usageService';
 import { subscriptionService } from '../services/subscriptionService';
+import { translationService, SUPPORTED_TRANSLATION_LANGUAGES } from '../services/translationService.js';
 import { APPLICATION_TONES, APPLICATION_LENGTHS } from '../utils/constants';
 import { normalizeWhatsAppNumber } from '../utils/validators.js';
 
@@ -44,19 +46,39 @@ const ApplyJob = () => {
   const { profile } = useProfile();
 
   const [job, setJob] = useState(null);
-  const [tone, setTone] = useState('Professional');
-  const [length, setLength] = useState('Medium');
+
+  // Plan Checks
+  const [isFree, setIsFree] = useState(() => subscriptionService.isFree());
+  const [isPlus, setIsPlus] = useState(() => subscriptionService.isPlus());
+  const [isPro, setIsPro] = useState(() => subscriptionService.isPro());
+
+  useEffect(() => {
+    const handleSubChanged = () => {
+      setIsFree(subscriptionService.isFree());
+      setIsPlus(subscriptionService.isPlus());
+      setIsPro(subscriptionService.isPro());
+    };
+    window.addEventListener('tf_subscription_changed', handleSubChanged);
+    return () => window.removeEventListener('tf_subscription_changed', handleSubChanged);
+  }, []);
+
+  const isToneLocked = (toneId) => isFree && toneId !== 'Short & Direct';
+  const isLengthLocked = (lengthId) => (isFree ? lengthId !== 'Short' : isPlus ? lengthId === 'Detailed' : false);
+  const isTranslationLocked = !isPro;
+
+  const [tone, setTone] = useState(isFree ? 'Short & Direct' : 'Professional');
+  const [length, setLength] = useState(isFree ? 'Short' : 'Medium');
   const [cvAttached, setCvAttached] = useState(!!profile?.cvUrl);
   const [portfolioIncluded, setPortfolioIncluded] = useState(!!profile?.portfolioUrl);
 
   const [message, setMessage] = useState('');
   const [originalGenerated, setOriginalGenerated] = useState('');
+  const [originalEnglish, setOriginalEnglish] = useState('');
+  const [activeLanguage, setActiveLanguage] = useState('English');
+  const [showTranslateMenu, setShowTranslateMenu] = useState(false);
+  const [translating, setTranslating] = useState(false);
   const [isEdited, setIsEdited] = useState(false);
   const [loadingAI, setLoadingAI] = useState(false);
-
-  // Bangla draft workspace
-  const [showBanglaWorkspace, setShowBanglaWorkspace] = useState(false);
-  const [banglaDraft, setBanglaDraft] = useState('');
 
   // Modals
   const [showRegenConfirm, setShowRegenConfirm] = useState(false);
@@ -65,6 +87,13 @@ const ApplyJob = () => {
 
   // Why you match accordion
   const [showMatchReasons, setShowMatchReasons] = useState(false);
+
+  // Quota & Feature Upgrade Modal State
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [upgradeTitle, setUpgradeTitle] = useState('Limit Reached');
+  const [upgradeHeadline, setUpgradeHeadline] = useState('Upgrade Membership');
+  const [upgradeReason, setUpgradeReason] = useState('');
+  const [upgradePlan, setUpgradePlan] = useState('plus');
 
   // Load Job & Check for existing draft
   useEffect(() => {
@@ -79,22 +108,30 @@ const ApplyJob = () => {
     // Check if an existing draft exists for this job
     const existingApp = getApplicationByJobId(jobId);
     if (existingApp && existingApp.status === 'draft') {
-      setMessage(existingApp.message);
-      setOriginalGenerated(existingApp.originalGeneratedMessage || existingApp.message);
-      setTone(existingApp.tone || 'Professional');
-      setLength(existingApp.length || 'Medium');
+      let draftTone = existingApp.tone || (isFree ? 'Short & Direct' : 'Professional');
+      let draftLength = existingApp.length || (isFree ? 'Short' : 'Medium');
+
+      if (isToneLocked(draftTone)) draftTone = 'Short & Direct';
+      if (isLengthLocked(draftLength)) draftLength = isFree ? 'Short' : 'Medium';
+
+      const initialMsg = existingApp.message || '';
+      setMessage(initialMsg);
+      setOriginalGenerated(existingApp.originalGeneratedMessage || initialMsg);
+      setOriginalEnglish(existingApp.originalGeneratedMessage || initialMsg);
+      setTone(draftTone);
+      setLength(draftLength);
       setCvAttached(existingApp.cvAttached !== undefined ? existingApp.cvAttached : true);
       setPortfolioIncluded(existingApp.portfolioIncluded !== undefined ? existingApp.portfolioIncluded : true);
       toast('Loaded your saved draft.', { icon: '📝' });
     } else {
-      // Generate initial AI application
-      handleGenerate(jobData, 'Professional', 'Medium', true, true);
+      // Generate initial application matching user plan defaults
+      const initTone = isFree ? 'Short & Direct' : 'Professional';
+      const initLength = isFree ? 'Short' : 'Medium';
+      setTone(initTone);
+      setLength(initLength);
+      handleGenerate(jobData, initTone, initLength, true, true);
     }
   }, [jobId, profile, navigate]);
-
-  // Quota Upgrade Modal
-  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
-  const [upgradeReason, setUpgradeReason] = useState('');
 
   const handleGenerate = async (
     targetJob = job,
@@ -104,14 +141,6 @@ const ApplyJob = () => {
     targetPortfolio = portfolioIncluded
   ) => {
     if (!targetJob) return;
-
-    // Check AI generation quota
-    const aiCheck = usageService.canUseAIApply();
-    if (!aiCheck.allowed) {
-      setUpgradeReason(aiCheck.reason);
-      setShowUpgradeModal(true);
-      return;
-    }
 
     setLoadingAI(true);
     try {
@@ -124,14 +153,21 @@ const ApplyJob = () => {
         portfolioIncluded: targetPortfolio,
       });
 
-      // Consume AI Apply quota
-      usageService.consumeAIApply();
-
       setMessage(res.message);
       setOriginalGenerated(res.message);
+      setOriginalEnglish(res.message);
+      setActiveLanguage('English');
       setIsEdited(false);
     } catch (err) {
-      toast.error('Failed to generate application message');
+      if (err?.code === 'UPGRADE_REQUIRED' || err?.code === 'PRO_REQUIRED' || err?.status === 403) {
+        setUpgradeTitle(err.code === 'PRO_REQUIRED' ? 'Pro Feature' : 'Upgrade Required');
+        setUpgradeHeadline('Upgrade Membership');
+        setUpgradeReason(err.message || 'Upgrade required to use this application setting.');
+        setUpgradePlan(err.code === 'PRO_REQUIRED' ? 'pro' : 'plus');
+        setShowUpgradeModal(true);
+      } else {
+        toast.error('Failed to generate application message');
+      }
     } finally {
       setLoadingAI(false);
     }
@@ -141,43 +177,108 @@ const ApplyJob = () => {
     if (isEdited && message !== originalGenerated) {
       setShowRegenConfirm(true);
     } else {
-      handleGenerate();
+      handleGenerate(job, tone, length, cvAttached, portfolioIncluded);
       toast.success('Generated fresh application message!');
     }
   };
 
   const confirmRegenerate = () => {
     setShowRegenConfirm(false);
-    handleGenerate();
+    handleGenerate(job, tone, length, cvAttached, portfolioIncluded);
     toast.success('Generated fresh application message!');
   };
 
   const handleToneChange = (newTone) => {
+    if (isToneLocked(newTone)) {
+      setUpgradeTitle('Plus Feature');
+      setUpgradeHeadline('Unlock All Application Tones');
+      setUpgradeReason('Professional, Friendly, and Confident tones are available on Plus and Pro plans. Upgrade to Plus to personalize your application tone for every client.');
+      setUpgradePlan('plus');
+      setShowUpgradeModal(true);
+      return;
+    }
     setTone(newTone);
+    setActiveLanguage('English');
     handleGenerate(job, newTone, length, cvAttached, portfolioIncluded);
   };
 
   const handleLengthChange = (newLength) => {
+    if (isLengthLocked(newLength)) {
+      if (newLength === 'Detailed') {
+        setUpgradeTitle('Pro Feature');
+        setUpgradeHeadline('Unlock Detailed Applications');
+        setUpgradeReason('Detailed message length (200+ words) is an exclusive Pro feature designed for comprehensive high-conversion proposals.');
+        setUpgradePlan('pro');
+      } else {
+        setUpgradeTitle('Plus Feature');
+        setUpgradeHeadline('Unlock Medium Length Applications');
+        setUpgradeReason('Medium message length is available on Plus and Pro plans. Upgrade to Plus to expand your application details.');
+        setUpgradePlan('plus');
+      }
+      setShowUpgradeModal(true);
+      return;
+    }
     setLength(newLength);
+    setActiveLanguage('English');
     handleGenerate(job, tone, newLength, cvAttached, portfolioIncluded);
   };
 
-  const handleTranslateBangla = async () => {
-    if (!banglaDraft.trim()) {
-      toast.error('Please write a Bangla draft first');
+  const handleTranslateClick = () => {
+    if (isTranslationLocked) {
+      setUpgradeTitle('Pro Feature');
+      setUpgradeHeadline('Translate with Google Translate');
+      setUpgradeReason('Google Translate is an exclusive Pro feature. Upgrade to Pro to translate your application into Bengali, Hindi, Spanish, French, German, and more while preserving all portfolio links and personal details.');
+      setUpgradePlan('pro');
+      setShowUpgradeModal(true);
       return;
     }
-    setLoadingAI(true);
+    setShowTranslateMenu(!showTranslateMenu);
+  };
+
+  const handleSelectLanguage = async (targetLang) => {
+    setShowTranslateMenu(false);
+    if (targetLang === 'English' || targetLang === 'en') {
+      if (originalEnglish) {
+        setMessage(originalEnglish);
+        setActiveLanguage('English');
+        toast.success('Switched back to English original.');
+      }
+      return;
+    }
+
+    setTranslating(true);
     try {
-      const res = await aiService.translateAndImproveBangla(banglaDraft, profile, job);
-      setMessage(res.message);
-      setIsEdited(true);
-      setShowBanglaWorkspace(false);
-      toast.success('Translated & polished to professional English!');
+      const textToTranslate = originalEnglish || message;
+      if (!originalEnglish) {
+        setOriginalEnglish(message);
+      }
+
+      const res = await translationService.translateMessage({
+        text: textToTranslate,
+        targetLanguage: targetLang,
+        job,
+        profile,
+      });
+
+      if (res.success && res.translatedText) {
+        setMessage(res.translatedText);
+        setActiveLanguage(res.targetLanguage);
+        toast.success(`Translated to ${res.targetLanguage} with Google Translate!`);
+      } else {
+        toast.error('Translation failed. Please try again.');
+      }
     } catch (err) {
       toast.error('Translation error');
     } finally {
-      setLoadingAI(false);
+      setTranslating(false);
+    }
+  };
+
+  const handleRevertToEnglish = () => {
+    if (originalEnglish) {
+      setMessage(originalEnglish);
+      setActiveLanguage('English');
+      toast.success('Restored English version.');
     }
   };
 
@@ -209,8 +310,10 @@ const ApplyJob = () => {
   };
 
   const handleSaveDraft = () => {
+    const currentUid = profile?.id || getCurrentUserId();
     const app = createApplication({
       jobId: job.id,
+      userId: currentUid,
       title: job.title,
       company: job.company || job.author,
       platform: job.platform,
@@ -229,6 +332,8 @@ const ApplyJob = () => {
     });
 
     addApplication(app);
+    setUserJobState(job.id, 'draft', currentUid);
+    updateJobStatus(job.id, 'draft', currentUid);
     toast.success('Application saved as draft!');
     navigate('/applications');
   };
@@ -237,10 +342,18 @@ const ApplyJob = () => {
     setShowSendConfirmation(false);
 
     if (didSend) {
+      const liveIsPro = isPro || subscriptionService.isPro();
       const applyCheck = usageService.canApply();
       if (!applyCheck.allowed) {
-        setUpgradeReason(applyCheck.reason);
-        setShowUpgradeModal(true);
+        if (liveIsPro) {
+          toast.error(applyCheck.reason || 'Application quota exhausted.', { duration: 4500 });
+        } else {
+          setUpgradeTitle('Application Limit Reached');
+          setUpgradeHeadline('Upgrade Membership');
+          setUpgradeReason(applyCheck.reason);
+          setUpgradePlan(isFree ? 'plus' : 'pro');
+          setShowUpgradeModal(true);
+        }
         return;
       }
 
@@ -268,14 +381,22 @@ const ApplyJob = () => {
       try {
         usageService.consumeApplication();
       } catch (err) {
-        setUpgradeReason(err.message);
-        setShowUpgradeModal(true);
+        if (liveIsPro) {
+          toast.error(err.message || 'Application quota exhausted.', { duration: 4500 });
+        } else {
+          setUpgradeTitle('Application Limit Reached');
+          setUpgradeHeadline('Upgrade Membership');
+          setUpgradeReason(err.message);
+          setUpgradePlan(isFree ? 'plus' : 'pro');
+          setShowUpgradeModal(true);
+        }
         return;
       }
 
       addApplication(app);
       setUserJobApplied(job.id, currentUid);
-      updateJobStatus(job.id, 'applied');
+      setUserJobState(job.id, 'applied', currentUid);
+      updateJobStatus(job.id, 'applied', currentUid);
       toast.success('Application recorded! Added to Applications.');
       navigate('/applications');
     } else {
@@ -298,10 +419,6 @@ const ApplyJob = () => {
             <ChevronLeft size={22} className="mr-0.5" />
             <span className="text-sm font-medium">Back</span>
           </button>
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-xs font-semibold">
-            <Sparkles size={12} />
-            <span>AI Assistant ({aiService.isApiConfigured() ? 'AI Powered' : 'Demo AI Mode'})</span>
-          </div>
         </div>
 
         {/* Section 1: Job Context & Match Card */}
@@ -369,139 +486,149 @@ const ApplyJob = () => {
           <div>
             <label className="block text-xs font-semibold text-text-primary mb-1.5">Application Tone</label>
             <div className="grid grid-cols-2 gap-1.5">
-              {APPLICATION_TONES.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => handleToneChange(t.id)}
-                  className={`p-2 rounded-xl border text-left transition-all ${
-                    tone === t.id
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border bg-surface text-text-secondary hover:bg-surface-hover'
-                  }`}
-                >
-                  <span className="text-xs font-bold block">{t.label}</span>
-                  <span className="text-[10px] text-text-muted truncate block">{t.desc}</span>
-                </button>
-              ))}
+              {APPLICATION_TONES.map((t) => {
+                const locked = isToneLocked(t.id);
+                const active = tone === t.id && !locked;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => handleToneChange(t.id)}
+                    className={`p-2 rounded-xl border text-left transition-all ${
+                      active
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : locked
+                        ? 'border-border/70 bg-surface/60 text-text-muted hover:bg-surface-hover cursor-pointer'
+                        : 'border-border bg-surface text-text-secondary hover:bg-surface-hover'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold block">{t.label}</span>
+                      {locked && <Lock size={12} className="text-text-muted flex-shrink-0" />}
+                    </div>
+                    <span className="text-[10px] text-text-muted truncate block">{t.desc}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {/* Length Selector & Attachments */}
+          {/* Length Selector & Google Translate */}
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="block text-xs font-semibold text-text-primary mb-1.5">Message Length</label>
               <div className="flex bg-surface border border-border rounded-xl p-1 gap-1">
-                {APPLICATION_LENGTHS.map((l) => (
-                  <button
-                    key={l.id}
-                    type="button"
-                    onClick={() => handleLengthChange(l.id)}
-                    className={`flex-1 py-1 text-xs font-medium rounded-lg transition-all ${
-                      length === l.id ? 'bg-primary text-white shadow-sm' : 'text-text-muted hover:text-text-primary'
-                    }`}
-                  >
-                    {l.label}
-                  </button>
-                ))}
+                {APPLICATION_LENGTHS.map((l) => {
+                  const locked = isLengthLocked(l.id);
+                  const active = length === l.id && !locked;
+                  return (
+                    <button
+                      key={l.id}
+                      type="button"
+                      onClick={() => handleLengthChange(l.id)}
+                      className={`flex-1 py-1 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-0.5 ${
+                        active
+                          ? 'bg-primary text-white shadow-sm'
+                          : locked
+                          ? 'text-text-muted hover:text-text-secondary cursor-pointer'
+                          : 'text-text-muted hover:text-text-primary'
+                      }`}
+                    >
+                      <span>{l.label}</span>
+                      {locked && <Lock size={10} className="text-text-muted" />}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Bangla draft toggle button */}
+            {/* Google Translate Button */}
             <div>
-              <label className="block text-xs font-semibold text-text-primary mb-1.5">Language Mode</label>
+              <label className="block text-xs font-semibold text-text-primary mb-1.5">Language</label>
               <button
                 type="button"
-                onClick={() => setShowBanglaWorkspace(!showBanglaWorkspace)}
-                className={`w-full py-1.5 px-2.5 rounded-xl border text-xs font-medium flex items-center justify-center gap-1.5 transition-colors ${
-                  showBanglaWorkspace
+                onClick={handleTranslateClick}
+                disabled={translating}
+                className={`w-full py-1.5 px-2.5 rounded-xl border text-xs font-medium flex items-center justify-between transition-colors ${
+                  isTranslationLocked
+                    ? 'border-border bg-surface text-text-muted hover:bg-surface-hover cursor-pointer'
+                    : activeLanguage !== 'English' || showTranslateMenu
                     ? 'border-primary bg-primary/10 text-primary'
                     : 'border-border bg-surface text-text-secondary hover:bg-surface-hover'
                 }`}
               >
-                <Languages size={14} />
-                <span>Bangla Draft Mode</span>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Languages size={14} className={activeLanguage !== 'English' ? 'text-primary' : 'text-text-muted'} />
+                  <span className="truncate">
+                    {activeLanguage !== 'English' ? activeLanguage : 'Translate with Google Translate'}
+                  </span>
+                </div>
+                {isTranslationLocked ? (
+                  <Lock size={12} className="text-text-muted flex-shrink-0" />
+                ) : (
+                  <ChevronDown size={14} className="text-text-muted flex-shrink-0" />
+                )}
               </button>
             </div>
           </div>
 
-          {/* Bangla Draft Expansion Workspace */}
-          {showBanglaWorkspace && (
+          {/* Google Translate Selection Panel */}
+          {showTranslateMenu && !isTranslationLocked && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
-              className="bg-surface border border-primary/30 rounded-xl p-3 space-y-2"
+              className="bg-surface border border-primary/30 rounded-xl p-3 shadow-elevated space-y-2"
             >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-text-primary">Write in Bangla:</span>
-                <span className="text-[10px] text-text-muted">Will translate into professional English</span>
+              <div className="flex items-center justify-between pb-1 border-b border-border text-[11px] font-semibold text-text-primary">
+                <span>Translate with Google Translate</span>
+                <span className="text-[10px] text-primary font-bold">Pro Feature</span>
               </div>
-              <textarea
-                rows={3}
-                placeholder="যেমন: ভাই আমি একজন ভিডিও এডিটর, আপনার ইউটিউব চ্যানেলের জন্য কোয়ালিটি এডিটিং করতে পারব..."
-                value={banglaDraft}
-                onChange={(e) => setBanglaDraft(e.target.value)}
-                className="w-full bg-surface-hover border border-border rounded-lg p-2.5 text-xs text-text-primary focus:outline-none focus:border-primary"
-              />
-              <Button
-                variant="primary"
-                size="sm"
-                fullWidth
-                loading={loadingAI}
-                onClick={handleTranslateBangla}
-              >
-                Improve & Translate to Professional English
-              </Button>
+              <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pt-1">
+                <button
+                  type="button"
+                  onClick={() => handleSelectLanguage('English')}
+                  className={`px-2.5 py-1.5 rounded-lg text-left text-xs font-medium transition-colors ${
+                    activeLanguage === 'English'
+                      ? 'bg-primary text-white font-bold'
+                      : 'hover:bg-surface-hover text-text-secondary'
+                  }`}
+                >
+                  English (Original)
+                </button>
+                {SUPPORTED_TRANSLATION_LANGUAGES.map((lang) => (
+                  <button
+                    key={lang.code}
+                    type="button"
+                    onClick={() => handleSelectLanguage(lang.code)}
+                    className={`px-2.5 py-1.5 rounded-lg text-left text-xs font-medium transition-colors ${
+                      activeLanguage.includes(lang.name) || activeLanguage === lang.name
+                        ? 'bg-primary text-white font-bold'
+                        : 'hover:bg-surface-hover text-text-secondary'
+                    }`}
+                  >
+                    {lang.name}
+                  </button>
+                ))}
+              </div>
             </motion.div>
           )}
 
-          {/* Application Quality Score Widget (V4) */}
-          {(() => {
-            const qualityEval = aiService.calculateApplicationQualityScore({
-              message,
-              job,
-              profile,
-              cvAttached,
-              portfolioIncluded,
-            });
-            return (
-              <div className="bg-surface border border-border rounded-xl p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Sparkles size={14} className="text-primary" />
-                    <span className="text-xs font-bold text-text-primary">
-                      Application Quality Score
-                    </span>
-                  </div>
-                  <span
-                    className={`text-xs font-extrabold px-2 py-0.5 rounded-full border ${qualityEval.color} ${qualityEval.bg} ${qualityEval.border}`}
-                  >
-                    {qualityEval.score}/100 • {qualityEval.rating}
-                  </span>
-                </div>
-
-                <div className="w-full bg-surface-hover h-1.5 rounded-full overflow-hidden">
-                  <div
-                    className="h-full gradient-primary rounded-full transition-all duration-300"
-                    style={{ width: `${qualityEval.score}%` }}
-                  />
-                </div>
-
-                <div className="space-y-1 pt-1">
-                  {qualityEval.feedback.map((f, i) => (
-                    <p
-                      key={i}
-                      className={`text-[11px] leading-tight ${
-                        f.startsWith('⚠') ? 'text-amber-500' : 'text-emerald-500'
-                      }`}
-                    >
-                      {f}
-                    </p>
-                  ))}
-                </div>
+          {/* Active Translation Indicator */}
+          {activeLanguage !== 'English' && (
+            <div className="flex items-center justify-between bg-primary/10 border border-primary/25 rounded-xl px-3 py-2 text-xs">
+              <div className="flex items-center gap-1.5 text-primary font-medium truncate">
+                <Languages size={14} />
+                <span>Translated to {activeLanguage} with Google Translate</span>
               </div>
-            );
-          })()}
+              <button
+                type="button"
+                onClick={handleRevertToEnglish}
+                className="text-xs font-bold text-primary hover:underline flex-shrink-0 ml-2"
+              >
+                Show English Original
+              </button>
+            </div>
+          )}
 
           {/* Attachments Checklist */}
           <div className="flex items-center gap-4 bg-surface border border-border rounded-xl p-2.5 px-3">
@@ -682,8 +809,10 @@ const ApplyJob = () => {
         <UpgradeModal
           isOpen={showUpgradeModal}
           onClose={() => setShowUpgradeModal(false)}
-          title="Daily Quota Exceeded"
+          title={upgradeTitle}
+          headline={upgradeHeadline}
           message={upgradeReason}
+          highlightPlan={upgradePlan}
         />
       </div>
     </PageTransition>

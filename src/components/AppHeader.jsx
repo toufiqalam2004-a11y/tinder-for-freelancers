@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Bell, Search, Settings, Crown } from 'lucide-react';
+import { ArrowLeft, Bell, Search, Settings, Crown, Briefcase } from 'lucide-react';
 import ThemeSelector from './ThemeSelector';
 import NotificationsModal from './NotificationsModal';
 import GlobalSearchModal from './GlobalSearchModal';
@@ -31,9 +31,9 @@ export default function AppHeader() {
     };
   }, []);
 
-  // Starting/onboarding/login routes where header must NOT be shown
-  const onboardingPaths = ['/', '/verify-otp', '/profile-setup'];
-  const isOnboarding = onboardingPaths.includes(location.pathname);
+  // Starting/onboarding/login/landing/admin routes where in-app header must NOT be shown
+  const onboardingPaths = ['/', '/login', '/welcome', '/verify-otp', '/profile-setup'];
+  const isOnboarding = onboardingPaths.includes(location.pathname) || location.pathname.startsWith('/admin');
 
   if (isOnboarding) {
     return null;
@@ -60,14 +60,19 @@ export default function AppHeader() {
               onClick={() => navigate('/jobs')}
               className="flex items-center gap-2 text-left group"
             >
-              <div className="w-7 h-7 rounded-lg gradient-primary flex items-center justify-center text-white font-black text-xs shadow-glow">
-                TF
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#E11D48] to-[#F43F6E] p-0.5 shadow-md shadow-rose-900/30 group-hover:scale-105 transition-transform flex-shrink-0">
+                <div className="w-full h-full bg-[#141212] rounded-[6px] flex items-center justify-center">
+                  <Briefcase className="w-4 h-4 text-[#F43F6E]" />
+                </div>
               </div>
               <div>
-                <span className="font-extrabold text-sm text-text-primary tracking-tight block leading-none">
-                  Tinder <span className="gradient-text">for Freelancers</span>
+                <span className="font-extrabold text-sm text-text-primary tracking-tight inline-flex items-center gap-1.5 whitespace-nowrap leading-none">
+                  <span>Tinder for Freelancers</span>
+                  <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-400 leading-none">
+                    Beta
+                  </span>
                 </span>
-                <span className="text-[9px] text-text-muted font-medium tracking-wide">
+                <span className="text-[9px] text-text-muted font-medium tracking-wide block mt-0.5">
                   Swipe. Match. Get Hired.
                 </span>
               </div>

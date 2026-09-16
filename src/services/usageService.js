@@ -1,8 +1,8 @@
 /**
- * Daily Usage & Credits Tracking Service (V6.1 Demo Mode)
+ * Application Quota & Usage Tracking Service (Rolling 8-Hour Window)
  *
- * Tracks daily applications & AI generation quotas with automatic midnight rollover,
- * and maintains purchased credit balance stacking.
+ * Tracks included subscription quota (Free: 5, Plus: 15, Pro: 25) with automatic
+ * rolling 8-hour refill windows, separate Bonus Application Tokens, and purchased top-up credits.
  */
 
 import { SUBSCRIPTION_PLANS, CREDIT_PACKAGES } from '../utils/constants.js';
@@ -13,8 +13,24 @@ import {
   setStoredDailyUsage,
   getStoredSubscription,
   setStoredSubscription,
+  getStoredQuotaWindow,
+  setStoredQuotaWindow,
+  getCurrentUserId,
 } from '../data/storage.js';
 import { rewardService } from './rewardService.js';
+import {
+  APPLICATION_QUOTA_WINDOW_HOURS,
+  APPLICATION_QUOTA_WINDOW_MS,
+  FREE_APPLICATION_QUOTA,
+  PLUS_APPLICATION_QUOTA,
+  PRO_APPLICATION_QUOTA,
+  PLAN_QUOTA_CONFIG,
+  getPlanQuotaConfig,
+  getApplicationsPerWindow,
+  formatWindowCountdown,
+} from '../utils/quotaConfig.js';
+import { normalizePlan } from '../utils/planUtils.js';
+import { apiClient } from './apiClient.js';
 
 export class UsageService {
   /**
@@ -22,6 +38,93 @@ export class UsageService {
    */
   getTodayDateString() {
     return new Date().toISOString().slice(0, 10);
+  }
+
+  /**
+   * Retrieves or initializes the user's rolling 8-hour quota window.
+   * Refills automatically every 8 hours with zero rollover.
+   */
+  getQuotaWindow() {
+    const now = Date.now();
+    let window = getStoredQuotaWindow();
+    const currentPlan = normalizePlan(subscriptionService.getSubscription().plan);
+
+    if (!window) {
+      window = {
+        plan: currentPlan,
+        applicationsUsed: 0,
+        windowStart: now,
+        windowEnd: now + APPLICATION_QUOTA_WINDOW_MS,
+        createdAt: new Date(now).toISOString(),
+        updatedAt: new Date(now).toISOString(),
+      };
+      setStoredQuotaWindow(window);
+    } else {
+      let changed = false;
+      if (window.plan !== currentPlan) {
+        window.plan = currentPlan;
+        changed = true;
+      }
+      // Check if 8-hour window has expired -> automatic refill, no rollover
+      if (now >= window.windowEnd) {
+        window.applicationsUsed = 0;
+        window.windowStart = now;
+        window.windowEnd = now + APPLICATION_QUOTA_WINDOW_MS;
+        changed = true;
+      }
+      if (changed) {
+        window.updatedAt = new Date(now).toISOString();
+        setStoredQuotaWindow(window);
+      }
+    }
+    return window;
+  }
+
+  /**
+   * Comprehensive quota status for active plan and rolling 8-hour window.
+   */
+  getQuotaStatus() {
+    const sub = subscriptionService.getSubscription();
+    const plan = normalizePlan(sub.plan);
+    const planConfig = getPlanQuotaConfig(plan);
+    const limit = planConfig.applicationsPerWindow;
+
+    const window = this.getQuotaWindow();
+    const used = window.applicationsUsed || 0;
+    const remainingQuota = Math.max(0, limit - used);
+
+    const now = Date.now();
+    const refillInMs = Math.max(0, window.windowEnd - now);
+    const refillFormatted = formatWindowCountdown(refillInMs);
+
+    const bonusTokens = rewardService.getRewardCredits();
+    const { activeCredits: purchasedCredits } = this.getCreditsSummary();
+    const availableApplications = remainingQuota + bonusTokens + purchasedCredits;
+    const isExhausted = remainingQuota === 0;
+
+    return {
+      plan,
+      planConfig,
+      limit,
+      applicationsPerWindow: limit,
+      dailyLimit: limit, // backward compatibility
+      applicationsUsed: used,
+      used,
+      remainingQuota,
+      remainingSubscriptionQuota: remainingQuota,
+      windowStart: window.windowStart,
+      windowEnd: window.windowEnd,
+      refillInMs,
+      refillAt: new Date(window.windowEnd).toISOString(),
+      refillFormatted,
+      windowHours: APPLICATION_QUOTA_WINDOW_HOURS,
+      bonusTokens,
+      rewardCredits: bonusTokens, // backward compatibility
+      purchasedCredits,
+      availableApplications,
+      isExhausted,
+      canApply: availableApplications > 0,
+    };
   }
 
   /**
@@ -87,99 +190,121 @@ export class UsageService {
   }
 
   /**
-   * Computes available application balances across subscription quota, reward credits, and purchased credits.
+   * Computes available application balances across subscription quota, bonus tokens, and purchased credits.
    */
   getApplicationBalances() {
-    const plan = subscriptionService.getCurrentPlanDetails();
-    const dailyLimit = plan.limits.applicationsPerDay;
-    const usage = this.getTodayUsage();
-    const usedToday = usage.applicationsUsed || 0;
-    const remainingQuota = Math.max(0, dailyLimit - usedToday);
-    const rewardCredits = rewardService.getRewardCredits();
-    const { activeCredits: purchasedCredits } = this.getCreditsSummary();
-
+    const status = this.getQuotaStatus();
     return {
-      dailyLimit,
-      usedToday,
-      remainingSubscriptionQuota: remainingQuota,
-      rewardCredits,
-      purchasedCredits,
-      availableApplications: remainingQuota + rewardCredits + purchasedCredits,
+      dailyLimit: status.limit,
+      limit: status.limit,
+      applicationsPerWindow: status.limit,
+      usedToday: status.used,
+      applicationsUsed: status.used,
+      remainingSubscriptionQuota: status.remainingQuota,
+      remainingQuota: status.remainingQuota,
+      bonusTokens: status.bonusTokens,
+      rewardCredits: status.bonusTokens,
+      purchasedCredits: status.purchasedCredits,
+      availableApplications: status.availableApplications,
+      refillInMs: status.refillInMs,
+      refillAt: status.refillAt,
+      refillFormatted: status.refillFormatted,
+      windowHours: status.windowHours,
+      isExhausted: status.isExhausted,
     };
   }
 
   /**
-   * Checks if user can submit another job application today.
+   * Checks if user can submit another job application.
    * Priority:
-   * 1. Daily plan quota (Free=5, Plus=20, Pro=100)
-   * 2. Reward credits (from daily login & referral bonus)
+   * 1. 8-Hour Rolling Quota (Free=5, Plus=15, Pro=25)
+   * 2. Bonus Application Tokens (streak rewards & referral bonuses)
    * 3. Purchased top-up credits stack
    */
   canApply() {
-    const plan = subscriptionService.getCurrentPlanDetails();
-    const balances = this.getApplicationBalances();
+    const status = this.getQuotaStatus();
 
-    // 1. Under daily subscription quota
-    if (balances.remainingSubscriptionQuota > 0) {
+    // 1. Under included 8-hour quota
+    if (status.remainingQuota > 0) {
       return {
         allowed: true,
-        source: 'daily_quota',
-        usedToday: balances.usedToday,
-        dailyLimit: balances.dailyLimit,
-        remainingToday: balances.remainingSubscriptionQuota,
-        rewardCredits: balances.rewardCredits,
-        creditsAvailable: balances.purchasedCredits,
-        availableApplications: balances.availableApplications,
+        source: 'included_quota',
+        used: status.used,
+        limit: status.limit,
+        remainingToday: status.remainingQuota,
+        remainingQuota: status.remainingQuota,
+        dailyLimit: status.limit,
+        usedToday: status.used,
+        rewardCredits: status.bonusTokens,
+        bonusTokens: status.bonusTokens,
+        creditsAvailable: status.purchasedCredits,
+        availableApplications: status.availableApplications,
+        refillFormatted: status.refillFormatted,
       };
     }
 
-    // 2. Reward credits available
-    if (balances.rewardCredits > 0) {
+    // 2. Bonus Application Tokens available
+    if (status.bonusTokens > 0) {
       return {
         allowed: true,
-        source: 'reward_credits',
-        usedToday: balances.usedToday,
-        dailyLimit: balances.dailyLimit,
+        source: 'bonus_tokens',
+        used: status.used,
+        limit: status.limit,
         remainingToday: 0,
-        rewardCredits: balances.rewardCredits,
-        creditsAvailable: balances.purchasedCredits,
-        availableApplications: balances.availableApplications,
+        remainingQuota: 0,
+        dailyLimit: status.limit,
+        usedToday: status.used,
+        rewardCredits: status.bonusTokens,
+        bonusTokens: status.bonusTokens,
+        creditsAvailable: status.purchasedCredits,
+        availableApplications: status.availableApplications,
+        refillFormatted: status.refillFormatted,
       };
     }
 
     // 3. Purchased credits available
-    if (balances.purchasedCredits > 0) {
+    if (status.purchasedCredits > 0) {
       return {
         allowed: true,
         source: 'purchased_credits',
-        usedToday: balances.usedToday,
-        dailyLimit: balances.dailyLimit,
+        used: status.used,
+        limit: status.limit,
         remainingToday: 0,
+        remainingQuota: 0,
+        dailyLimit: status.limit,
+        usedToday: status.used,
         rewardCredits: 0,
-        creditsAvailable: balances.purchasedCredits,
-        availableApplications: balances.availableApplications,
+        bonusTokens: 0,
+        creditsAvailable: status.purchasedCredits,
+        availableApplications: status.availableApplications,
+        refillFormatted: status.refillFormatted,
       };
     }
 
     // Completely exhausted
+    const bonusMsg = status.bonusTokens > 0 ? ` Bonus tokens available: ${status.bonusTokens}.` : '';
     return {
       allowed: false,
       source: 'exhausted',
-      usedToday: balances.usedToday,
-      dailyLimit: balances.dailyLimit,
+      used: status.used,
+      limit: status.limit,
       remainingToday: 0,
-      rewardCredits: 0,
+      remainingQuota: 0,
+      dailyLimit: status.limit,
+      usedToday: status.used,
+      rewardCredits: status.bonusTokens,
+      bonusTokens: status.bonusTokens,
       creditsAvailable: 0,
       availableApplications: 0,
-      reason: 'You have reached your daily limit of ' + balances.dailyLimit + ' applications on the ' + plan.name + ' plan. Upgrade to Plus/Pro, earn daily/referral rewards, or buy a top-up credit pack to keep applying.',
+      refillFormatted: status.refillFormatted,
+      reason: `Application quota exhausted. Next refill in ${status.refillFormatted}.${bonusMsg}`,
     };
   }
 
   /**
-   * Consumes 1 application quota.
-   * Consumption order:
-   * 1. Normal subscription quota first
-   * 2. Reward credits second
+   * Consumes 1 application entitlement following strict priority:
+   * 1. Normal 8-hour subscription quota first
+   * 2. Bonus Application Tokens second
    * 3. Purchased top-up credits third
    */
   consumeApplication() {
@@ -188,30 +313,44 @@ export class UsageService {
       throw new Error(check.reason);
     }
 
-    const usage = this.getTodayUsage();
+    const window = this.getQuotaWindow();
+    const todayUsage = this.getTodayUsage();
 
-    if (check.source === 'daily_quota') {
-      usage.applicationsUsed = (usage.applicationsUsed || 0) + 1;
-      this.saveTodayUsage(usage);
+    if (check.source === 'included_quota' || check.source === 'daily_quota') {
+      window.applicationsUsed = (window.applicationsUsed || 0) + 1;
+      window.updatedAt = new Date().toISOString();
+      setStoredQuotaWindow(window);
+
+      todayUsage.applicationsUsed = (todayUsage.applicationsUsed || 0) + 1;
+      this.saveTodayUsage(todayUsage);
+
+      const status = this.getQuotaStatus();
       return {
-        consumedFrom: 'daily_quota',
-        usedToday: usage.applicationsUsed,
-        remainingDaily: check.dailyLimit - usage.applicationsUsed,
-        rewardCredits: check.rewardCredits,
-        creditsRemaining: check.creditsAvailable,
-        availableApplications: Math.max(0, check.availableApplications - 1),
+        consumedFrom: 'included_quota',
+        used: window.applicationsUsed,
+        remainingDaily: status.remainingQuota,
+        remainingQuota: status.remainingQuota,
+        bonusTokens: status.bonusTokens,
+        rewardCredits: status.bonusTokens,
+        creditsRemaining: status.purchasedCredits,
+        availableApplications: status.availableApplications,
+        refillFormatted: status.refillFormatted,
       };
     }
 
-    if (check.source === 'reward_credits') {
-      const remainingRewardCredits = rewardService.consumeRewardCredit();
+    if (check.source === 'bonus_tokens' || check.source === 'reward_credits') {
+      const remainingBonus = rewardService.consumeRewardCredit();
+      const status = this.getQuotaStatus();
       return {
-        consumedFrom: 'reward_credits',
-        usedToday: usage.applicationsUsed,
+        consumedFrom: 'bonus_tokens',
+        used: window.applicationsUsed,
         remainingDaily: 0,
-        rewardCredits: remainingRewardCredits,
-        creditsRemaining: check.creditsAvailable,
-        availableApplications: Math.max(0, check.availableApplications - 1),
+        remainingQuota: 0,
+        bonusTokens: remainingBonus,
+        rewardCredits: remainingBonus,
+        creditsRemaining: status.purchasedCredits,
+        availableApplications: status.availableApplications,
+        refillFormatted: status.refillFormatted,
       };
     }
 
@@ -220,7 +359,7 @@ export class UsageService {
     const now = new Date().getTime();
     let deducted = false;
 
-    // Deduct from the earliest expiring valid package
+    // Deduct from earliest expiring valid package
     for (const pkg of sub.credits || []) {
       const isExpired = pkg.expiresAt && new Date(pkg.expiresAt).getTime() < now;
       if (!isExpired && (pkg.remaining || 0) > 0) {
@@ -236,14 +375,18 @@ export class UsageService {
 
     subscriptionService.saveSubscription(sub);
     const newSummary = this.getCreditsSummary();
+    const status = this.getQuotaStatus();
 
     return {
       consumedFrom: 'purchased_credits',
-      usedToday: usage.applicationsUsed,
+      used: window.applicationsUsed,
       remainingDaily: 0,
-      rewardCredits: check.rewardCredits,
+      remainingQuota: 0,
+      bonusTokens: status.bonusTokens,
+      rewardCredits: status.bonusTokens,
       creditsRemaining: newSummary.activeCredits,
-      availableApplications: Math.max(0, check.availableApplications - 1),
+      availableApplications: status.availableApplications,
+      refillFormatted: status.refillFormatted,
     };
   }
 
@@ -313,6 +456,27 @@ export class UsageService {
       creditItem: newCreditItem,
       totalCredits: this.getCreditsSummary().activeCredits,
     };
+  }
+
+  /**
+   * Synchronize quota and balances from backend server.
+   */
+  async syncQuotaWithServer() {
+    try {
+      const serverData = await apiClient.getQuotaStatus();
+      if (serverData && serverData.success) {
+        const window = this.getQuotaWindow();
+        if (serverData.applicationsUsed !== undefined) {
+          window.applicationsUsed = serverData.applicationsUsed;
+        }
+        if (serverData.refillInMs !== undefined) {
+          window.windowEnd = Date.now() + serverData.refillInMs;
+        }
+        setStoredQuotaWindow(window);
+        return serverData;
+      }
+    } catch {}
+    return null;
   }
 }
 

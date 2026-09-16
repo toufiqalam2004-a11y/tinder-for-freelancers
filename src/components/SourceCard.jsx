@@ -11,6 +11,7 @@ import {
   Power,
   Sparkles,
   ExternalLink,
+  Lock,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Card from './Card';
@@ -27,6 +28,7 @@ export default function SourceCard({
   onRefreshed,
 }) {
   const { platform, name, sourceName, groupName, url, sourceUrl, groupUrl, enabled = true } = source;
+  const isBuiltin = source.type === 'builtin' || Boolean(source.isBuiltin) || (Boolean(source.isDemo) && !source.userId);
   const displayName = name || sourceName || groupName || 'Unnamed Source';
   const displayUrl = url || sourceUrl || groupUrl || '';
 
@@ -126,9 +128,17 @@ export default function SourceCard({
                 <span className="text-[10px] uppercase tracking-wider font-semibold text-text-muted block">
                   {meta.label}
                 </span>
-                {monitoringData?.isDemo && (
+                {isBuiltin ? (
+                  <span className="text-[9px] font-mono uppercase bg-primary/10 text-primary px-1.5 py-0.2 rounded border border-primary/20 font-bold">
+                    Built-in
+                  </span>
+                ) : monitoringData?.isDemo ? (
                   <span className="text-[9px] font-mono uppercase bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.2 rounded border border-amber-500/20 font-bold">
                     Demo
+                  </span>
+                ) : (
+                  <span className="text-[9px] font-mono uppercase bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.2 rounded border border-emerald-500/20 font-bold">
+                    Custom
                   </span>
                 )}
               </div>
@@ -137,7 +147,9 @@ export default function SourceCard({
           </div>
 
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            {enabled ? (
+            {isBuiltin ? (
+              <StatusBadge status="Included" variant="primary" />
+            ) : enabled ? (
               <StatusBadge status="Connected" variant="success" />
             ) : (
               <StatusBadge status="Disabled" variant="muted" />
@@ -151,28 +163,6 @@ export default function SourceCard({
             {displayUrl}
           </div>
         )}
-
-        {/* Telemetry Row */}
-        <div className="grid grid-cols-3 gap-2 py-2 px-2.5 bg-surface-hover rounded-xl border border-border text-center mb-3">
-          <div>
-            <span className="text-[10px] text-text-muted block">Last Updated</span>
-            <span className="text-xs font-semibold text-text-primary block mt-0.5 truncate">
-              {formatTimeAgo(monitoringData?.lastChecked || source.lastFetchedAt)}
-            </span>
-          </div>
-          <div>
-            <span className="text-[10px] text-text-muted block">Jobs Ingested</span>
-            <span className="text-xs font-semibold text-text-primary block mt-0.5">
-              {monitoringData?.postsFound || 0}
-            </span>
-          </div>
-          <div>
-            <span className="text-[10px] text-text-muted block">In Feed</span>
-            <span className="text-xs font-semibold text-primary block mt-0.5">
-              {monitoringData?.relevantJobs || 0}
-            </span>
-          </div>
-        </div>
 
         {/* Actions: Refresh, Enable/Disable, Remove */}
         <div className="flex items-center justify-between pt-1 border-t border-border">

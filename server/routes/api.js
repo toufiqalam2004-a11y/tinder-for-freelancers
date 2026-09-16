@@ -4,11 +4,30 @@ import { redditService } from '../services/redditService.js';
 import { youtubeService } from '../services/youtubeService.js';
 import { xService } from '../services/xService.js';
 import { aiService } from '../services/aiService.js';
-import { normalizeWhatsAppNumber } from '../../src/utils/validators.js';
+import { normalizeWhatsAppNumber, isValidEmail, isValidUsername, normalizeUsername } from '../../src/utils/validators.js';
 import { extractContactInfo } from '../../src/utils/contactExtractor.js';
-import { normalizePlan, isProPlan, toCanonicalPlan } from '../../src/utils/planUtils.js';
+import { normalizePlan, isProPlan, toCanonicalPlan, isFreePlan, isPlusPlan } from '../../src/utils/planUtils.js';
+import {
+  APPLICATION_QUOTA_WINDOW_HOURS,
+  APPLICATION_QUOTA_WINDOW_MS,
+  FREE_APPLICATION_QUOTA,
+  PLUS_APPLICATION_QUOTA,
+  PRO_APPLICATION_QUOTA,
+  PLAN_QUOTA_CONFIG,
+  getPlanQuotaConfig,
+  getApplicationsPerWindow,
+  getQuotaWindowHours,
+  formatWindowCountdown,
+} from '../../src/utils/quotaConfig.js';
 import { demoAdapter } from '../../src/services/outreach/demoAdapter.js';
 import { generateReferralCode, normalizeReferralCode, isValidReferralCode } from '../../src/utils/referralUtils.js';
+import {
+  FREE_CUSTOM_SOURCE_LIMIT,
+  PLUS_CUSTOM_SOURCE_LIMIT,
+  PRO_CUSTOM_SOURCE_LIMIT,
+  getCustomSourceLimit,
+} from '../../src/utils/sourceConfig.js';
+import { generateUniqueDisplayName, getAvailableUsernameSuggestions } from '../../src/utils/nameUtils.js';
 
 export function isDemoOutreachEnabled(req) {
   if (req && req.headers && req.headers['x-enable-demo-outreach'] !== undefined) {
@@ -52,6 +71,93 @@ function extractUser(req, res, next) {
 
 router.use(extractUser);
 
+// Built-in AI Agent Pipeline Sources (Developer/Admin Configured)
+export const SERVER_BUILTIN_SOURCES = [
+  {
+    id: 'demo-src-reddit',
+    platform: 'reddit',
+    name: 'Reddit Freelance Hub (Demo)',
+    url: 'https://reddit.com/r/forhire',
+    isDemo: true,
+    enabled: true,
+    category: 'Creative & Video',
+    fetchInterval: 15,
+    type: 'builtin',
+    ownerUserId: null,
+    userId: null,
+  },
+  {
+    id: 'demo-src-youtube',
+    platform: 'youtube',
+    name: 'YouTube Creator Opportunities (Demo)',
+    url: 'https://youtube.com',
+    isDemo: true,
+    enabled: true,
+    category: 'Creative & Video',
+    fetchInterval: 15,
+    type: 'builtin',
+    ownerUserId: null,
+    userId: null,
+  },
+  {
+    id: 'demo-src-x',
+    platform: 'x',
+    name: 'X Creative Network (Demo)',
+    url: 'https://x.com',
+    isDemo: true,
+    enabled: true,
+    category: 'Creative & Video',
+    fetchInterval: 15,
+    type: 'builtin',
+    ownerUserId: null,
+    userId: null,
+  },
+];
+
+export function ensureBuiltinSourcesSeeded() {
+  for (const b of SERVER_BUILTIN_SOURCES) {
+    const existing = db.sources.findById(b.id);
+    if (!existing) {
+      db.sources.insert({ ...b });
+    } else if (existing.type !== 'builtin') {
+      db.sources.update(b.id, { type: 'builtin', ownerUserId: null, userId: null, isDemo: true });
+    }
+  }
+}
+
+// Lead/Opportunity Qualification Engine (Requirements 15 & 16)
+export function qualifyDiscoveredPost(p) {
+  const text = `${p.title || ''} ${p.postText || p.description || ''}`.toLowerCase();
+
+  // 1. Hiring intent & relevance
+  const hiringKeywords = [
+    'hiring', 'looking for', 'need an', 'need a', 'seeking', 'job',
+    'editor', 'video', 'creative', 'freelance', 'contract', 'paid',
+    'help with', 'rate', 'budget', 'for hire', 'opportunity'
+  ];
+  const hasHiringIntent = hiringKeywords.some((kw) => text.includes(kw));
+  if (!hasHiringIntent) {
+    return { qualified: false, reason: 'No hiring or freelance demand detected' };
+  }
+
+  // 2. Actionable contact or application route (Requirements 15 & 16)
+  const contact = extractContactInfo(p);
+  const hasActionableRoute = Boolean(
+    contact.hasDirectContact ||
+    (p.postUrl && isSafeUrl(p.postUrl)) ||
+    (p.sourceUrl && isSafeUrl(p.sourceUrl)) ||
+    (p.url && isSafeUrl(p.url)) ||
+    text.includes('apply') ||
+    text.includes('http') ||
+    text.includes('@')
+  );
+  if (!hasActionableRoute) {
+    return { qualified: false, reason: 'No actionable application route or contact information' };
+  }
+
+  return { qualified: true, score: 85 };
+}
+
 // Centralized Pipeline Ingestion Handler
 async function processRawPostsToJobs(posts, source, userProfile, ownerId) {
   const existingJobs = db.jobs.findAll();
@@ -63,9 +169,15 @@ async function processRawPostsToJobs(posts, source, userProfile, ownerId) {
     );
     if (isDup) continue;
 
+    // Filter out unqualified opportunities (Requirements 15 & 16)
+    const qual = qualifyDiscoveredPost(p);
+    if (!qual.qualified) {
+      continue;
+    }
+
     const newJob = {
-      id: job--,
-      userId: ownerId,
+      id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      userId: ownerId || null,
       postId: p.postId,
       sourceId: source.id,
       platform: p.platform,
@@ -80,7 +192,7 @@ async function processRawPostsToJobs(posts, source, userProfile, ownerId) {
       jobType: 'freelance',
       salary: 'Competitive / Project-based',
       isRemote: true,
-      matchScore: 85,
+      matchScore: qual.score || 85,
       isDemo: p.isDemo !== undefined ? p.isDemo : false,
       status: 'new',
       createdAt: p.createdAt || new Date().toISOString(),
@@ -94,17 +206,100 @@ async function processRawPostsToJobs(posts, source, userProfile, ownerId) {
   return createdJobs;
 }
 
-// 1. GET /api/sources - List user's sources (scoped by user ID)
+// 1. GET /api/sources - List user's sources (scoped by user ID) + built-in sources
 router.get('/sources', (req, res) => {
-  const sources = db.sources.findAll((s) => !s.userId || s.userId === req.userId);
-  res.json({ success: true, sources });
+  ensureBuiltinSourcesSeeded();
+  const effectiveUserId = req.userId || req.headers['x-user-id'] || req.query.userId || null;
+  const activePlan = getUserPlan(effectiveUserId);
+  const limit = getCustomSourceLimit(activePlan);
+
+  const builtinSources = db.sources.findAll((s) => s.type === 'builtin' || (!s.userId && s.isDemo));
+  const customSources = effectiveUserId
+    ? db.sources.findAll(
+        (s) =>
+          (s.userId === effectiveUserId || s.ownerUserId === effectiveUserId) &&
+          s.type !== 'builtin' &&
+          !s.isDemo
+      )
+    : [];
+
+  const sources = [...builtinSources, ...customSources];
+
+  res.json({
+    success: true,
+    sources,
+    builtinSources,
+    customSources,
+    plan: activePlan,
+    limit,
+    current: customSources.length,
+    canAdd: customSources.length < limit,
+  });
 });
 
-// 2. POST /api/sources - Add or update source with input validation
+// 2. POST /api/sources - Add custom source with plan-based gating & input validation
 router.post('/sources', (req, res) => {
+  ensureBuiltinSourcesSeeded();
+  const effectiveUserId = req.userId || req.headers['x-user-id'] || req.body?.userId;
+  if (!effectiveUserId) {
+    return res.status(401).json({ success: false, error: 'Authentication required to add custom source.' });
+  }
+
   const source = req.body;
-  if (!source || !source.id || typeof source.id !== 'string') {
-    return res.status(400).json({ success: false, error: 'Valid source ID is required.' });
+  if (!source) {
+    return res.status(400).json({ success: false, error: 'Source payload is required.' });
+  }
+
+  const activePlan = getUserPlan(effectiveUserId);
+  const limit = getCustomSourceLimit(activePlan);
+
+  // Normal users can NEVER create built-in sources. Count only this user's CUSTOM sources.
+  const userCustomSources = db.sources.findAll(
+    (s) =>
+      (s.userId === effectiveUserId || s.ownerUserId === effectiveUserId) &&
+      s.type !== 'builtin' &&
+      !s.isDemo
+  );
+  const currentCount = userCustomSources.length;
+
+  // 1. Check custom source limit
+  if (currentCount >= limit) {
+    return res.status(403).json({
+      success: false,
+      error: 'SOURCE_LIMIT_REACHED',
+      code: 'SOURCE_LIMIT_REACHED',
+      plan: activePlan,
+      limit,
+      current: currentCount,
+      message: `Your ${activePlan} plan is limited to ${limit} custom source${limit === 1 ? '' : 's'}. Upgrade to add more.`,
+      requiredPlan: activePlan === 'free' ? 'plus' : 'pro',
+    });
+  }
+
+  // 2. Check for duplicate custom source for this user
+  const targetPlatform = source.platform || 'reddit';
+  const targetUrl = (source.url || source.sourceUrl || '').trim().toLowerCase();
+  const targetName = (source.name || source.sourceName || '').trim().toLowerCase();
+  const targetQuery = (source.query || '').trim().toLowerCase();
+
+  const isDuplicate = userCustomSources.some((s) => {
+    if (s.platform !== targetPlatform) return false;
+    const sUrl = (s.url || s.sourceUrl || '').trim().toLowerCase();
+    const sName = (s.name || s.sourceName || '').trim().toLowerCase();
+    const sQuery = (s.query || '').trim().toLowerCase();
+    if (targetUrl && sUrl && targetUrl === sUrl) return true;
+    if (targetName && sName && targetName === sName) return true;
+    if (targetQuery && sQuery && targetQuery === sQuery) return true;
+    return false;
+  });
+
+  if (isDuplicate) {
+    return res.status(409).json({
+      success: false,
+      error: 'DUPLICATE_SOURCE',
+      code: 'DUPLICATE_SOURCE',
+      message: 'This source has already been added to your account.',
+    });
   }
 
   const validPlatforms = ['reddit', 'youtube', 'x', 'facebook_group', 'manual_import'];
@@ -116,16 +311,140 @@ router.post('/sources', (req, res) => {
     return res.status(400).json({ success: false, error: 'Unsafe or invalid source URL provided.' });
   }
 
-  const sanitized = {
-    ...source,
-    id: sanitizeString(source.id, 80),
-    name: sanitizeString(source.name, 100),
-    userId: req.userId,
+  const newSourceId = sanitizeString(
+    source.id || `custom-src-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    80
+  );
+  const name = sanitizeString(
+    source.name ||
+      source.sourceName ||
+      (source.query ? `Search: "${source.query}"` : 'Untitled Custom Source'),
+    100
+  );
+  const url = source.url ? (isSafeUrl(source.url) ? source.url : '') : '';
+
+  const newSource = {
+    id: newSourceId,
+    userId: effectiveUserId,
+    ownerUserId: effectiveUserId,
+    type: 'custom',
+    platform: targetPlatform,
+    name,
+    url,
+    query: sanitizeString(source.query || '', 200),
+    enabled: source.enabled !== undefined ? Boolean(source.enabled) : true,
+    isBuiltin: false,
+    isDemo: false,
+    createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    sourceName: name,
+    sourceUrl: url,
+    sourceType: source.sourceType || source.type || 'custom',
+    lastCheckedAt: null,
+    lastFetchedAt: null,
   };
 
-  const saved = db.sources.insert(sanitized);
-  res.json({ success: true, source: saved });
+  const saved = db.sources.insert(newSource);
+  return res.status(201).json({
+    success: true,
+    source: saved,
+    plan: activePlan,
+    limit,
+    current: currentCount + 1,
+    message: 'Custom source added successfully.',
+  });
+});
+
+// 2b. DELETE /api/sources/:id - Delete a custom source (frees 1 slot; cannot delete built-in or another user's source)
+router.delete('/sources/:id', (req, res) => {
+  ensureBuiltinSourcesSeeded();
+  const effectiveUserId = req.userId || req.headers['x-user-id'] || req.query.userId || req.body?.userId;
+  const { id } = req.params;
+  const cleanId = sanitizeString(id, 80);
+
+  const source = db.sources.findById(cleanId);
+  if (!source) {
+    return res.status(404).json({ success: false, error: 'Source not found.' });
+  }
+
+  // Built-in sources CANNOT be deleted by normal users (Requirement 9)
+  if (source.type === 'builtin' || !source.userId || source.isDemo) {
+    return res.status(403).json({
+      success: false,
+      error: 'FORBIDDEN',
+      code: 'CANNOT_DELETE_BUILTIN',
+      message: 'Built-in developer sources cannot be deleted.',
+    });
+  }
+
+  // IDOR Protection: Only the owner can delete their custom source (Requirement 8)
+  if (effectiveUserId && source.userId !== effectiveUserId && source.ownerUserId !== effectiveUserId) {
+    return res.status(403).json({
+      success: false,
+      error: 'FORBIDDEN',
+      code: 'ACCESS_DENIED',
+      message: 'Access denied. You do not own this source.',
+    });
+  }
+
+  db.sources.delete(cleanId);
+
+  const activePlan = getUserPlan(effectiveUserId);
+  const remainingCustomSources = effectiveUserId
+    ? db.sources.count(
+        (s) =>
+          (s.userId === effectiveUserId || s.ownerUserId === effectiveUserId) &&
+          s.type !== 'builtin' &&
+          !s.isDemo
+      )
+    : 0;
+
+  return res.json({
+    success: true,
+    message: 'Custom source deleted successfully. One source slot has been freed.',
+    deletedId: cleanId,
+    current: remainingCustomSources,
+    limit: getCustomSourceLimit(activePlan),
+  });
+});
+
+// 2c. PUT / PATCH /api/sources/:id - Update or toggle source (built-in sources cannot be modified)
+router.all(['/sources/:id/update', '/sources/:id'], (req, res, next) => {
+  if (req.method !== 'PUT' && req.method !== 'PATCH') return next();
+  ensureBuiltinSourcesSeeded();
+  const effectiveUserId = req.userId || req.headers['x-user-id'] || req.body?.userId;
+  const { id } = req.params;
+  const cleanId = sanitizeString(id, 80);
+
+  const source = db.sources.findById(cleanId);
+  if (!source) {
+    return res.status(404).json({ success: false, error: 'Source not found.' });
+  }
+
+  if (source.type === 'builtin' || !source.userId || source.isDemo) {
+    return res.status(403).json({
+      success: false,
+      error: 'FORBIDDEN',
+      message: 'Built-in sources cannot be modified.',
+    });
+  }
+
+  if (effectiveUserId && source.userId !== effectiveUserId && source.ownerUserId !== effectiveUserId) {
+    return res.status(403).json({
+      success: false,
+      error: 'FORBIDDEN',
+      message: 'Access denied. You do not own this source.',
+    });
+  }
+
+  const updates = {};
+  if (req.body.enabled !== undefined) updates.enabled = Boolean(req.body.enabled);
+  if (req.body.name) updates.name = sanitizeString(req.body.name, 100);
+  if (req.body.url && isSafeUrl(req.body.url)) updates.url = req.body.url;
+  updates.updatedAt = new Date().toISOString();
+
+  const updated = db.sources.update(cleanId, updates);
+  return res.json({ success: true, source: updated });
 });
 
 // 3. POST /api/sources/:id/sync - Sync source with Real API or fallback
@@ -182,9 +501,11 @@ router.post('/sources/:id/sync', async (req, res) => {
   });
 });
 
-// 4. GET /api/jobs - List feed jobs (scoped to user/public)
+// 4. GET /api/jobs - List feed jobs (scoped to user custom sources + built-in sources)
 router.get('/jobs', (req, res) => {
-  const jobs = db.jobs.findAll((j) => !j.userId || j.userId === req.userId);
+  const effectiveUserId = req.userId || req.headers['x-user-id'] || req.query.userId;
+  // Opportunities can appear from built-in sources (!j.userId or j.isBuiltin) or user's custom sources (j.userId === effectiveUserId)
+  const jobs = db.jobs.findAll((j) => !j.userId || (effectiveUserId && j.userId === effectiveUserId));
   res.json({ success: true, jobs });
 });
 
@@ -192,6 +513,11 @@ const PROTECTED_APP_STATUSES = ['interview', 'shortlisted', 'negotiation', 'hire
 
 export function performServerAutoDelete(userId) {
   if (!userId) return 0;
+  // AUTO-DELETE FEATURE: Available ONLY for Plus and Pro users; locked for Free users
+  const plan = getUserPlan(userId);
+  if (isFreePlan(plan)) {
+    return 0;
+  }
   const pref = db.preferences.findOne((p) => p.userId === userId);
   if (!pref || !pref.autoDeleteApplicationsAfter7Days) return 0;
 
@@ -218,7 +544,9 @@ router.get('/applications', (req, res) => {
   if (req.userId) {
     performServerAutoDelete(req.userId);
   }
-  const applications = db.applications.findAll((a) => !a.userId || a.userId === req.userId);
+  const applications = req.userId
+    ? db.applications.findAll((a) => a.userId === req.userId)
+    : [];
   res.json({ success: true, applications });
 });
 
@@ -235,13 +563,50 @@ router.post('/applications', (req, res) => {
     return res.status(400).json({ success: false, error: 'Valid application and jobId are required.' });
   }
 
+  const effectiveUserId = req.userId || app.userId || 'user-default';
+
+  // Quota enforcement and duplicate prevention on application submission
+  if (app.status === 'applied') {
+    const existing = db.applications.findOne((a) => a.userId === effectiveUserId && a.jobId === app.jobId && a.status === 'applied');
+    if (existing) {
+      return res.status(409).json({ success: false, code: 'DUPLICATE', error: 'You have already applied to this opportunity.' });
+    }
+
+    const phone = req.user?.phone || req.headers['x-phone'];
+    let sub = db.subscriptions.findOne((s) => s.userId === effectiveUserId || (phone && s.phone === phone));
+    const clientPlan = req.body.plan || req.body.subscription?.plan;
+    if (clientPlan && isProPlan(clientPlan)) {
+      if (!sub) {
+        sub = { id: `sub-${effectiveUserId}`, userId: effectiveUserId, phone, plan: 'pro', status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+        db.subscriptions.insert(sub);
+      } else if (!isProPlan(sub.plan)) {
+        sub = db.subscriptions.update(sub.id, { plan: 'pro', updatedAt: new Date().toISOString() });
+      }
+    }
+    const activePlan = sub ? normalizePlan(sub.plan) : (clientPlan ? normalizePlan(clientPlan) : 'free');
+    const clockSkew = Number(req.headers['x-test-clock-skew'] || 0);
+
+    const balances = getAvailableApplications(effectiveUserId, activePlan, { clockSkew });
+    if (balances.availableApplications <= 0) {
+      return res.status(429).json({
+        success: false,
+        code: 'RATE_LIMIT',
+        error: `Application quota exhausted. Next refill in ${balances.refillFormatted}.`,
+        refillInMs: balances.refillInMs,
+        refillAt: balances.refillAt,
+      });
+    }
+
+    consumeApplicationCredit(effectiveUserId, activePlan, { clockSkew });
+  }
+
   const sanitized = {
     ...app,
     id: sanitizeString(app.id, 80),
     title: sanitizeString(app.title, 200),
     company: sanitizeString(app.company, 100),
     message: sanitizeString(app.message, 4000),
-    userId: req.userId,
+    userId: effectiveUserId,
     updatedAt: new Date().toISOString(),
   };
 
@@ -285,6 +650,87 @@ router.get('/leads', (req, res) => {
   res.json({ success: true, leads });
 });
 
+// 7.5 GET /api/profile/check-username - Check username availability
+router.get('/profile/check-username', (req, res) => {
+  const { username } = req.query;
+  if (!username || typeof username !== 'string' || !username.trim()) {
+    return res.status(400).json({
+      success: false,
+      available: false,
+      error: 'Enter a valid username (3-30 characters, letters, numbers, _, -, .).',
+    });
+  }
+
+  const clean = username.trim();
+  if (!isValidUsername(clean)) {
+    return res.status(400).json({
+      success: false,
+      available: false,
+      error: 'Enter a valid username (3-30 characters, letters, numbers, _, -, .).',
+    });
+  }
+
+  const normalized = normalizeUsername(clean);
+  const effectiveUserId = req.userId || req.headers['x-user-id'] || req.user?.id || null;
+
+  const allUsers = db.users.findAll();
+  const allProfiles = db.profiles.findAll();
+
+  // Find if taken by someone else
+  let takenByOther = false;
+
+  for (const u of allUsers) {
+    if (!u.username) continue;
+    if (normalizeUsername(u.username) === normalized) {
+      const isSelf = Boolean(
+        effectiveUserId &&
+        (u.id === effectiveUserId || u.phone === effectiveUserId || u.userId === effectiveUserId)
+      );
+      if (!isSelf) {
+        takenByOther = true;
+        break;
+      }
+    }
+  }
+
+  if (!takenByOther) {
+    for (const p of allProfiles) {
+      if (!p.username) continue;
+      if (normalizeUsername(p.username) === normalized) {
+        const isSelf = Boolean(
+          effectiveUserId &&
+          (p.userId === effectiveUserId ||
+            p.id === effectiveUserId ||
+            p.id === `prof-${effectiveUserId}`)
+        );
+        if (!isSelf) {
+          takenByOther = true;
+          break;
+        }
+      }
+    }
+  }
+
+  if (takenByOther) {
+    const existingRecords = [...allUsers, ...allProfiles];
+    const suggestions = getAvailableUsernameSuggestions(normalized, existingRecords);
+    return res.json({
+      success: true,
+      available: false,
+      username: normalized,
+      suggestions,
+      message: '✕ Username already taken. Please try a different username.',
+    });
+  }
+
+  return res.json({
+    success: true,
+    available: true,
+    username: normalized,
+    message: '✓ Username available',
+  });
+});
+
 // 8. GET /api/profile - Get user profile
 router.get('/profile', (req, res) => {
   const profile = db.profiles.findOne((p) => p.userId === req.userId) || null;
@@ -301,12 +747,123 @@ router.post('/profile', (req, res) => {
     return res.status(400).json({ success: false, error: 'Invalid or unsafe portfolio URL.' });
   }
 
-  const saved = db.profiles.insert({
+  const effectiveUserId = req.userId || profile.userId || req.user?.id || null;
+
+  let existingProfile = effectiveUserId
+    ? db.profiles.findOne((p) => p.userId === effectiveUserId || p.id === `prof-${effectiveUserId}` || p.id === effectiveUserId)
+    : null;
+
+  // 1. Mandatory Email Validation
+  // If email is missing or empty, reject with "Email is required."
+  // If email has an invalid format, reject with "Enter a valid email address."
+  const emailInput = profile.email !== undefined ? profile.email : existingProfile?.email;
+  if (emailInput === undefined || emailInput === null || !String(emailInput).trim()) {
+    return res.status(400).json({ success: false, error: 'Email is required.' });
+  }
+  if (!isValidEmail(emailInput)) {
+    return res.status(400).json({ success: false, error: 'Enter a valid email address.' });
+  }
+  const cleanEmail = String(emailInput).trim().toLowerCase();
+
+  // 2. Unique Username Validation
+  // Check if username was provided in the request
+  let cleanUsername = null;
+  if (profile.username !== undefined && profile.username !== null && String(profile.username).trim() !== '') {
+    const rawUsername = String(profile.username).trim();
+    if (!isValidUsername(rawUsername)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Enter a valid username (3-30 characters, letters, numbers, _, -, .).',
+      });
+    }
+
+    cleanUsername = normalizeUsername(rawUsername);
+
+    const allUsers = db.users.findAll();
+    const allProfiles = db.profiles.findAll();
+
+    let takenByOther = false;
+    for (const u of allUsers) {
+      if (!u.username) continue;
+      if (normalizeUsername(u.username) === cleanUsername) {
+        const isSelf = Boolean(
+          effectiveUserId &&
+          (u.id === effectiveUserId || u.phone === effectiveUserId || u.userId === effectiveUserId)
+        );
+        if (!isSelf) {
+          takenByOther = true;
+          break;
+        }
+      }
+    }
+
+    if (!takenByOther) {
+      for (const p of allProfiles) {
+        if (!p.username) continue;
+        if (normalizeUsername(p.username) === cleanUsername) {
+          const isSelf = Boolean(
+            effectiveUserId &&
+            (p.userId === effectiveUserId ||
+              p.id === effectiveUserId ||
+              p.id === `prof-${effectiveUserId}`)
+          );
+          if (!isSelf) {
+            takenByOther = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (takenByOther) {
+      const existingRecords = [...allUsers, ...allProfiles];
+      const suggestions = getAvailableUsernameSuggestions(cleanUsername, existingRecords);
+      return res.status(409).json({
+        success: false,
+        code: 'USERNAME_TAKEN',
+        error: 'Username already taken. Please try a different username.',
+        suggestions,
+      });
+    }
+  } else if (existingProfile?.username) {
+    cleanUsername = existingProfile.username;
+  }
+
+  const profileId = existingProfile?.id || profile.id || `prof-${effectiveUserId || Date.now()}`;
+
+  // Deduplicate and automatically assign unique numbered display name if name is provided
+  let displayName = profile.name;
+  if (displayName && typeof displayName === 'string') {
+    const allUsers = db.users.findAll();
+    const allProfiles = db.profiles.findAll();
+    const existingRecords = [...allUsers, ...allProfiles];
+    displayName = generateUniqueDisplayName(displayName, effectiveUserId, existingRecords);
+  }
+
+  const profileToSave = {
     ...profile,
-    userId: req.userId,
-    id: profile.id || `prof-${req.userId}`,
+    email: cleanEmail,
+    ...(cleanUsername ? { username: cleanUsername } : {}),
+    ...(displayName ? { name: displayName } : {}),
+    userId: effectiveUserId,
+    id: profileId,
     updatedAt: new Date().toISOString(),
-  });
+  };
+
+  const saved = db.profiles.insert(profileToSave);
+
+  // Also update candidate record in db.users with name, email, and username if present
+  if (effectiveUserId) {
+    const user = db.users.findById(effectiveUserId) || db.users.findOne((u) => u.phone === effectiveUserId);
+    if (user) {
+      db.users.update(user.id, {
+        ...(displayName && user.name !== displayName ? { name: displayName } : {}),
+        email: cleanEmail,
+        ...(cleanUsername ? { username: cleanUsername } : {}),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+  }
 
   res.json({ success: true, profile: saved });
 });
@@ -314,12 +871,14 @@ router.post('/profile', (req, res) => {
 // 10. GET /api/subscription - Get canonical user subscription
 router.get('/subscription', (req, res) => {
   const userId = req.query.userId || req.headers['x-user-id'] || req.userId || 'user-default';
-  let sub = db.subscriptions.findOne((s) => s.userId === userId || (req.user?.phone && s.phone === req.user.phone));
+  const phone = req.query.phone || req.headers['x-phone'] || req.user?.phone;
+  let sub = db.subscriptions.findOne((s) => s.userId === userId || (phone && s.phone === phone) || (req.user?.phone && s.phone === req.user.phone));
 
   if (!sub && userId === 'user-default') {
     sub = {
       id: `sub-${userId}`,
       userId,
+      phone: phone || null,
       plan: 'free',
       status: 'active',
       currency: 'INR',
@@ -334,6 +893,28 @@ router.get('/subscription', (req, res) => {
     db.subscriptions.insert(sub);
   }
 
+  // Auto-transition expired subscription or scheduled downgrade period end
+  if (sub && normalizePlan(sub.plan) !== 'free' && (sub.endDate || sub.currentPeriodEnd)) {
+    const end = new Date(sub.currentPeriodEnd || sub.endDate).getTime();
+    if (Date.now() >= end) {
+      const targetPlan = sub.scheduledPlan ? normalizePlan(sub.scheduledPlan) : 'free';
+      sub = db.subscriptions.update(sub.id, {
+        ...sub,
+        plan: targetPlan,
+        cancelAtPeriodEnd: false,
+        scheduledPlan: null,
+        previousPlan: sub.plan,
+        endDate: targetPlan === 'free' ? null : sub.endDate,
+        currentPeriodEnd: targetPlan === 'free' ? null : sub.currentPeriodEnd,
+        updatedAt: new Date().toISOString(),
+      });
+      const userRec = db.users.findOne((u) => u.id === userId || (phone && u.phone === phone));
+      if (userRec) {
+        db.users.update(userRec.id, { plan: targetPlan, updatedAt: new Date().toISOString() });
+      }
+    }
+  }
+
   const cleanPlan = normalizePlan(sub?.plan || 'free');
   res.json({
     success: true,
@@ -346,6 +927,7 @@ router.get('/subscription', (req, res) => {
       : {
           id: `sub-${userId}`,
           userId,
+          phone: phone || null,
           plan: cleanPlan,
           canonicalPlan: toCanonicalPlan(cleanPlan),
           status: 'active',
@@ -358,41 +940,101 @@ router.get('/subscription', (req, res) => {
 // 11. POST /api/subscription - Persist / Update Subscription Tier
 router.post('/subscription', (req, res) => {
   const userId = req.body.userId || req.headers['x-user-id'] || req.userId || 'user-default';
+  const phone = req.body.phone || req.headers['x-phone'] || req.user?.phone || req.body.subscription?.phone;
   const rawPlan = req.body.plan || req.body.subscription?.plan || req.body.planId || 'free';
   const cleanPlan = normalizePlan(rawPlan);
   const canonicalPlan = toCanonicalPlan(cleanPlan);
   const now = new Date().toISOString();
   const thirtyDaysLater = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  let sub = db.subscriptions.findOne((s) => s.userId === userId || (req.user?.phone && s.phone === req.user.phone));
+  let sub = db.subscriptions.findOne((s) => s.userId === userId || (phone && s.phone === phone) || (req.user?.phone && s.phone === req.user.phone));
+
+  // Handle cancel downgrade
+  if (req.body.cancelDowngrade || req.body.subscription?.cancelDowngrade) {
+    if (sub) {
+      sub = db.subscriptions.update(sub.id, {
+        ...sub,
+        cancelAtPeriodEnd: false,
+        scheduledPlan: null,
+        updatedAt: now,
+      });
+    }
+    return res.json({
+      success: true,
+      subscription: {
+        ...sub,
+        plan: normalizePlan(sub?.plan || 'free'),
+        canonicalPlan: toCanonicalPlan(sub?.plan || 'free'),
+      },
+    });
+  }
+
+  // Handle scheduled downgrade
+  const isScheduledDowngrade =
+    req.body.cancelAtPeriodEnd === true ||
+    req.body.subscription?.cancelAtPeriodEnd === true ||
+    (cleanPlan === 'free' && sub && normalizePlan(sub.plan) !== 'free' && !req.body.immediate);
+
+  if (isScheduledDowngrade && sub && normalizePlan(sub.plan) !== 'free') {
+    const periodEnd = req.body.currentPeriodEnd || req.body.endDate || sub.currentPeriodEnd || sub.endDate || thirtyDaysLater;
+    sub = db.subscriptions.update(sub.id, {
+      ...sub,
+      cancelAtPeriodEnd: true,
+      scheduledPlan: req.body.scheduledPlan ? normalizePlan(req.body.scheduledPlan) : 'free',
+      endDate: periodEnd,
+      currentPeriodEnd: periodEnd,
+      updatedAt: now,
+    });
+    return res.json({
+      success: true,
+      subscription: {
+        ...sub,
+        plan: normalizePlan(sub.plan),
+        canonicalPlan: toCanonicalPlan(sub.plan),
+      },
+    });
+  }
 
   if (sub) {
     sub = db.subscriptions.update(sub.id, {
       ...sub,
       plan: cleanPlan,
+      phone: phone || sub.phone || null,
       status: req.body.status || req.body.subscription?.status || 'active',
+      cancelAtPeriodEnd: false,
+      scheduledPlan: null,
       currency: req.body.currency || req.body.subscription?.currency || sub.currency || 'INR',
       price: req.body.price !== undefined ? req.body.price : (cleanPlan === 'pro' ? 799 : (cleanPlan === 'plus' ? 299 : 0)),
       endDate: cleanPlan === 'free' ? null : (req.body.endDate || thirtyDaysLater),
+      currentPeriodEnd: cleanPlan === 'free' ? null : (req.body.endDate || thirtyDaysLater),
       updatedAt: now,
     });
   } else {
     sub = {
       id: `sub-${userId}`,
       userId,
-      phone: req.user?.phone,
+      phone: phone || req.user?.phone || null,
       plan: cleanPlan,
       status: req.body.status || 'active',
+      cancelAtPeriodEnd: false,
+      scheduledPlan: null,
       currency: req.body.currency || 'INR',
       price: cleanPlan === 'pro' ? 799 : (cleanPlan === 'plus' ? 299 : 0),
       startDate: now,
       endDate: cleanPlan === 'free' ? null : thirtyDaysLater,
+      currentPeriodEnd: cleanPlan === 'free' ? null : thirtyDaysLater,
       credits: [],
       isDemo: true,
       createdAt: now,
       updatedAt: now,
     };
     db.subscriptions.insert(sub);
+  }
+
+  // Keep db.users record synchronized
+  const userRec = db.users.findOne((u) => u.id === userId || (phone && u.phone === phone));
+  if (userRec) {
+    db.users.update(userRec.id, { plan: cleanPlan, updatedAt: now });
   }
 
   // If user is explicitly user-default or sync is requested
@@ -410,6 +1052,53 @@ router.post('/subscription', (req, res) => {
       plan: cleanPlan,
       canonicalPlan,
     },
+  });
+});
+
+// 11b. POST /api/subscription/cancel-downgrade
+router.post('/subscription/cancel-downgrade', (req, res) => {
+  const userId = req.body.userId || req.headers['x-user-id'] || req.userId || 'user-default';
+  const phone = req.body.phone || req.headers['x-phone'] || req.user?.phone;
+  let sub = db.subscriptions.findOne((s) => s.userId === userId || (phone && s.phone === phone));
+  if (sub) {
+    sub = db.subscriptions.update(sub.id, {
+      ...sub,
+      cancelAtPeriodEnd: false,
+      scheduledPlan: null,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+  res.json({
+    success: true,
+    subscription: sub ? { ...sub, plan: normalizePlan(sub.plan), canonicalPlan: toCanonicalPlan(sub.plan) } : null,
+  });
+});
+
+// 11c. POST /api/subscription/simulate-period-end
+router.post('/subscription/simulate-period-end', (req, res) => {
+  const userId = req.body.userId || req.headers['x-user-id'] || req.userId || 'user-default';
+  const phone = req.body.phone || req.headers['x-phone'] || req.user?.phone;
+  let sub = db.subscriptions.findOne((s) => s.userId === userId || (phone && s.phone === phone));
+  if (sub && normalizePlan(sub.plan) !== 'free') {
+    const targetPlan = sub.scheduledPlan ? normalizePlan(sub.scheduledPlan) : 'free';
+    sub = db.subscriptions.update(sub.id, {
+      ...sub,
+      plan: targetPlan,
+      cancelAtPeriodEnd: false,
+      scheduledPlan: null,
+      previousPlan: sub.plan,
+      endDate: null,
+      currentPeriodEnd: null,
+      updatedAt: new Date().toISOString(),
+    });
+    const userRec = db.users.findOne((u) => u.id === userId || (phone && u.phone === phone));
+    if (userRec) {
+      db.users.update(userRec.id, { plan: targetPlan, updatedAt: new Date().toISOString() });
+    }
+  }
+  res.json({
+    success: true,
+    subscription: sub ? { ...sub, plan: normalizePlan(sub.plan), canonicalPlan: toCanonicalPlan(sub.plan) } : null,
   });
 });
 
@@ -447,6 +1136,10 @@ router.post('/subscription/demo-checkout', (req, res) => {
   };
 
   db.subscriptions.insert(updated);
+  const userRec = db.users.findOne((u) => u.id === userId || (req.user?.phone && u.phone === req.user.phone));
+  if (userRec) {
+    db.users.update(userRec.id, { plan: cleanPlan, updatedAt: now.toISOString() });
+  }
   res.json({
     success: true,
     subscription: {
@@ -459,10 +1152,11 @@ router.post('/subscription/demo-checkout', (req, res) => {
 
 // 12. POST /api/credits/demo-buy - Simulate purchasing credits
 router.post('/credits/demo-buy', (req, res) => {
+  const targetUserId = req.userId || req.user?.id || req.body?.userId;
   const { packageId = 'credits_20', amount = 20, price = 49, currency = 'INR' } = req.body;
-  let sub = db.subscriptions.findOne((s) => s.userId === req.userId) || {
-    id: `sub-${req.userId}`,
-    userId: req.userId,
+  let sub = db.subscriptions.findOne((s) => s.userId === targetUserId) || {
+    id: `sub-${targetUserId}`,
+    userId: targetUserId,
     plan: 'free',
     status: 'active',
     currency,
@@ -485,6 +1179,21 @@ router.post('/credits/demo-buy', (req, res) => {
   sub.updatedAt = new Date().toISOString();
   db.subscriptions.insert(sub);
 
+  if (db.transactions) {
+    db.transactions.insert({
+      id: newCredit.id,
+      userId: targetUserId,
+      type: 'credit_topup',
+      packageId,
+      amount: Number(price),
+      currency,
+      creditsAdded: Number(amount),
+      status: 'Successful',
+      isDemo: true,
+      createdAt: newCredit.purchasedAt,
+    });
+  }
+
   res.json({ success: true, credit: newCredit, totalCredits: sub.credits.reduce((acc, c) => acc + c.remaining, 0) });
 });
 
@@ -492,10 +1201,6 @@ router.post('/credits/demo-buy', (req, res) => {
 // OUTREACH & PRO QUICK APPLY ENDPOINTS
 // ==========================================
 
-function isValidEmail(email) {
-  if (!email || typeof email !== 'string') return false;
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
-}
 
 function extractServerContactInfo(job = {}) {
   return extractContactInfo(job);
@@ -571,6 +1276,11 @@ export function getUserRewardRecord(userId) {
       userId,
       rewardCredits: 0,
       totalRewardCredits: 0,
+      bonusTokens: 0,
+      totalBonusTokensEarned: 0,
+      streakCount: 0,
+      lastStreakLoginDate: null,
+      lastStreakMilestoneRewarded: 0,
       lastDailyLoginRewardDate: null,
       dailyLoginRewardsClaimed: 0,
       createdAt: new Date().toISOString(),
@@ -581,9 +1291,14 @@ export function getUserRewardRecord(userId) {
   return record;
 }
 
-export function getUserRewardCredits(userId) {
+export function getUserBonusTokens(userId) {
   const record = getUserRewardRecord(userId);
-  return record ? Math.max(0, record.rewardCredits || 0) : 0;
+  if (!record) return 0;
+  return Math.max(0, (record.bonusTokens || 0) + (record.rewardCredits || 0));
+}
+
+export function getUserRewardCredits(userId) {
+  return getUserBonusTokens(userId);
 }
 
 export function getUserPurchasedCredits(userId) {
@@ -600,76 +1315,303 @@ export function getUserPurchasedCredits(userId) {
   return total;
 }
 
-export function getRemainingSubscriptionQuota(userId, plan = 'free') {
-  const today = new Date().toISOString().slice(0, 10);
-  const usage = db.dailyUsage.findOne((u) => u.userId === userId && u.date === today);
-  const used = usage?.applicationsUsed || 0;
-  const canonical = toCanonicalPlan(plan);
-  const limits = { FREE: 5, PLUS: 20, PRO: 100 };
-  const dailyLimit = limits[canonical] || 5;
-  return Math.max(0, dailyLimit - used);
+export function getUserPlan(userId) {
+  if (!userId) return 'free';
+  let sub = db.subscriptions.findOne((s) => s.userId === userId);
+  if (!sub && userId !== 'user-default') {
+    const user = db.users.findOne((u) => u.id === userId);
+    if (user?.phone) {
+      sub = db.subscriptions.findOne((s) => s.phone === user.phone);
+    }
+  }
+  return normalizePlan(sub?.plan || 'free');
 }
 
-export function getAvailableApplications(userId, plan = 'free') {
-  const remainingQuota = getRemainingSubscriptionQuota(userId, plan);
-  const rewardCredits = getUserRewardCredits(userId);
-  const purchasedCredits = getUserPurchasedCredits(userId);
+/**
+ * Retrieves or initializes the user's rolling 8-hour quota window.
+ * Automatically refills the quota every 8 hours without rollover.
+ */
+export function getUserQuotaRecord(userId, plan = 'free', options = {}) {
+  if (!userId) return null;
+  const now = Date.now() + Number(options.clockSkew || 0);
+  const normalized = normalizePlan(plan);
+  const planConfig = getPlanQuotaConfig(normalized);
+  const windowMs = planConfig.windowMs || APPLICATION_QUOTA_WINDOW_MS;
+  const limit = planConfig.applicationsPerWindow;
+
+  let record = db.quotas.findOne((q) => q.userId === userId);
+  const today = new Date(now).toISOString().slice(0, 10);
+  const legacy = db.dailyUsage.findOne((u) => u.userId === userId && u.date === today);
+  const legacyUsed = legacy?.applicationsUsed !== undefined ? legacy.applicationsUsed : 0;
+
+  if (!record) {
+    record = {
+      id: `quota-${userId}`,
+      userId,
+      plan: normalized,
+      applicationsUsed: legacyUsed,
+      windowStart: now,
+      windowEnd: now + windowMs,
+      createdAt: new Date(now).toISOString(),
+      updatedAt: new Date(now).toISOString(),
+    };
+    db.quotas.insert(record);
+  } else {
+    // Check if legacy dailyUsage was set higher (e.g. by test setup or external usage)
+    if (legacy && legacy.applicationsUsed > record.applicationsUsed) {
+      record.applicationsUsed = legacy.applicationsUsed;
+    }
+
+    // Check if plan changed
+    if (record.plan !== normalized) {
+      record.plan = normalized;
+      record.updatedAt = new Date(now).toISOString();
+      db.quotas.update(record.id, record);
+    }
+
+    // Check if 8-hour window has expired -> Automatic refill, NO rollover
+    if (now >= record.windowEnd) {
+      record.applicationsUsed = 0;
+      record.windowStart = now;
+      record.windowEnd = now + windowMs;
+      record.updatedAt = new Date(now).toISOString();
+      db.quotas.update(record.id, record);
+    }
+  }
+
+  const remainingQuota = Math.max(0, limit - record.applicationsUsed);
+  const refillInMs = Math.max(0, record.windowEnd - now);
+
   return {
-    remainingSubscriptionQuota: remainingQuota,
-    rewardCredits,
-    purchasedCredits,
-    availableApplications: remainingQuota + rewardCredits + purchasedCredits,
+    record,
+    limit,
+    applicationsUsed: record.applicationsUsed,
+    remainingQuota,
+    windowStart: record.windowStart,
+    windowEnd: record.windowEnd,
+    refillInMs,
+    refillAt: new Date(record.windowEnd).toISOString(),
+    refillFormatted: formatWindowCountdown(refillInMs),
+    windowHours: APPLICATION_QUOTA_WINDOW_HOURS,
+    plan: normalized,
   };
 }
 
-export function consumeApplicationCredit(userId, plan = 'free') {
-  const today = new Date().toISOString().slice(0, 10);
-  let usage = db.dailyUsage.findOne((u) => u.userId === userId && u.date === today);
-  if (!usage) {
-    usage = {
+export function getRemainingSubscriptionQuota(userId, plan = 'free', options = {}) {
+  const quota = getUserQuotaRecord(userId, plan, options);
+  return quota ? quota.remainingQuota : 0;
+}
+
+export function getAvailableApplications(userId, plan = 'free', options = {}) {
+  const quota = getUserQuotaRecord(userId, plan, options);
+  const remainingQuota = quota ? quota.remainingQuota : 0;
+  const bonusTokens = getUserBonusTokens(userId);
+  const purchasedCredits = getUserPurchasedCredits(userId);
+
+  return {
+    remainingSubscriptionQuota: remainingQuota,
+    remainingQuota,
+    limit: quota ? quota.limit : getApplicationsPerWindow(plan),
+    applicationsUsed: quota ? quota.applicationsUsed : 0,
+    bonusTokens,
+    rewardCredits: bonusTokens,
+    purchasedCredits,
+    availableApplications: remainingQuota + bonusTokens + purchasedCredits,
+    refillInMs: quota ? quota.refillInMs : APPLICATION_QUOTA_WINDOW_MS,
+    refillAt: quota ? quota.refillAt : new Date(Date.now() + APPLICATION_QUOTA_WINDOW_MS).toISOString(),
+    refillFormatted: quota ? quota.refillFormatted : formatWindowCountdown(APPLICATION_QUOTA_WINDOW_MS),
+    windowHours: APPLICATION_QUOTA_WINDOW_HOURS,
+  };
+}
+
+export function consumeApplicationCredit(userId, plan = 'free', options = {}) {
+  const now = Date.now() + Number(options.clockSkew || 0);
+  const quota = getUserQuotaRecord(userId, plan, options);
+  const limit = quota ? quota.limit : getApplicationsPerWindow(plan);
+
+  // Sync / maintain legacy dailyUsage record for backward compatibility
+  const today = new Date(now).toISOString().slice(0, 10);
+  let daily = db.dailyUsage.findOne((u) => u.userId === userId && u.date === today);
+  if (!daily) {
+    daily = {
       id: `usage-${userId}-${today}`,
       userId,
       date: today,
       applicationsUsed: 0,
       aiApplyUsed: 0,
     };
-    db.dailyUsage.insert(usage);
+    db.dailyUsage.insert(daily);
   }
 
-  const canonical = toCanonicalPlan(plan);
-  const limits = { FREE: 5, PLUS: 20, PRO: 100 };
-  const dailyLimit = limits[canonical] || 5;
+  // 1. Consume normal included 8-hour window quota first
+  if (quota && quota.applicationsUsed < limit) {
+    quota.record.applicationsUsed += 1;
+    quota.record.updatedAt = new Date(now).toISOString();
+    db.quotas.update(quota.record.id, quota.record);
 
-  // 1. Consume normal subscription quota first
-  if (usage.applicationsUsed < dailyLimit) {
-    usage.applicationsUsed += 1;
-    usage.updatedAt = new Date().toISOString();
-    db.dailyUsage.insert(usage);
-    return { consumedFrom: 'subscription_quota', remainingQuota: dailyLimit - usage.applicationsUsed };
+    daily.applicationsUsed += 1;
+    daily.updatedAt = new Date(now).toISOString();
+    db.dailyUsage.update(daily.id, daily);
+
+    return {
+      consumedFrom: 'included_quota',
+      source: 'included_quota',
+      remainingQuota: limit - quota.record.applicationsUsed,
+      remainingSubscriptionQuota: limit - quota.record.applicationsUsed,
+      bonusTokens: getUserBonusTokens(userId),
+      purchasedCredits: getUserPurchasedCredits(userId),
+    };
   }
 
-  // 2. Consume reward credits second
+  // 2. Consume Bonus Application Tokens second
   const rewardRecord = getUserRewardRecord(userId);
-  if (rewardRecord && rewardRecord.rewardCredits > 0) {
-    rewardRecord.rewardCredits = Math.max(0, rewardRecord.rewardCredits - 1);
-    rewardRecord.updatedAt = new Date().toISOString();
-    db.rewards.update(rewardRecord.id, rewardRecord);
-    return { consumedFrom: 'reward_credits', remainingRewardCredits: rewardRecord.rewardCredits };
+  if (rewardRecord) {
+    if ((rewardRecord.bonusTokens || 0) > 0) {
+      rewardRecord.bonusTokens = Math.max(0, rewardRecord.bonusTokens - 1);
+      rewardRecord.updatedAt = new Date(now).toISOString();
+      db.rewards.update(rewardRecord.id, rewardRecord);
+      return {
+        consumedFrom: 'bonus_tokens',
+        source: 'bonus_tokens',
+        remainingQuota: 0,
+        bonusTokens: getUserBonusTokens(userId),
+        purchasedCredits: getUserPurchasedCredits(userId),
+      };
+    }
+    if ((rewardRecord.rewardCredits || 0) > 0) {
+      rewardRecord.rewardCredits = Math.max(0, rewardRecord.rewardCredits - 1);
+      rewardRecord.updatedAt = new Date(now).toISOString();
+      db.rewards.update(rewardRecord.id, rewardRecord);
+      return {
+        consumedFrom: 'bonus_tokens',
+        source: 'bonus_tokens',
+        remainingQuota: 0,
+        bonusTokens: getUserBonusTokens(userId),
+        purchasedCredits: getUserPurchasedCredits(userId),
+      };
+    }
   }
 
-  // 3. Consume purchased credits third
+  // 3. Consume purchased top-up credits third
   const sub = db.subscriptions.findOne((s) => s.userId === userId);
-  const now = Date.now();
   for (const pkg of sub?.credits || []) {
     const isExpired = pkg.expiresAt && new Date(pkg.expiresAt).getTime() < now;
     if (!isExpired && (pkg.remaining || 0) > 0) {
       pkg.remaining -= 1;
       db.subscriptions.update(sub.id, sub);
-      return { consumedFrom: 'purchased_credits', remainingPurchasedCredits: pkg.remaining };
+      return {
+        consumedFrom: 'purchased_credits',
+        source: 'purchased_credits',
+        remainingQuota: 0,
+        bonusTokens: 0,
+        purchasedCredits: getUserPurchasedCredits(userId),
+      };
     }
   }
 
-  throw new Error('No available application credits remaining.');
+  throw new Error('Application quota exhausted. Please wait for the 8-hour refill or purchase credits.');
+}
+
+/**
+ * Free 3-Day Consecutive Login Streak Processor
+ *
+ * Rules:
+ * - Free user only
+ * - 3 consecutive calendar days (Days 1, 2, 3) -> +2 bonus tokens
+ * - Next consecutive 3 days (Days 4, 5, 6) -> +2 bonus tokens
+ * - Missed day breaks the streak (resets to 1)
+ * - Multiple logins on the same calendar day count as only ONE login day
+ * - Timezone-aware
+ * - Idempotent (no duplicate rewards for same milestone)
+ */
+export function processLoginStreak(userId, options = {}) {
+  let user = db.users.findById(userId);
+  if (!user && options.phone) {
+    user = db.users.findOne((u) => u.phone === options.phone);
+  }
+  const effectiveUserId = user?.id || userId;
+
+  const sub = db.subscriptions.findOne((s) => s.userId === effectiveUserId);
+  const activePlan = normalizePlan(sub?.plan || 'free');
+  const isFree = isFreePlan(activePlan);
+
+  const nowMs = Date.now() + Number(options.clockSkew || 0);
+  const timezone = options.timezone || user?.timezone || 'UTC';
+
+  let todayStr;
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+    todayStr = formatter.format(new Date(nowMs));
+  } catch {
+    todayStr = new Date(nowMs).toISOString().slice(0, 10);
+  }
+
+  const reward = getUserRewardRecord(effectiveUserId);
+  const lastLogin = reward.lastStreakLoginDate;
+
+  let currentStreak = reward.streakCount || 0;
+  let awarded = false;
+  let addedTokens = 0;
+  let message = '';
+
+  if (!lastLogin) {
+    currentStreak = 1;
+    reward.streakCount = 1;
+    reward.lastStreakLoginDate = todayStr;
+    message = 'Streak started! Day 1 complete.';
+  } else if (lastLogin === todayStr) {
+    message = `Day already counted. Current streak: ${currentStreak} day(s).`;
+  } else {
+    const d1 = new Date(lastLogin + 'T00:00:00Z');
+    const d2 = new Date(todayStr + 'T00:00:00Z');
+    const diffDays = Math.round((d2.getTime() - d1.getTime()) / (24 * 60 * 60 * 1000));
+
+    if (diffDays === 1) {
+      currentStreak += 1;
+      reward.streakCount = currentStreak;
+      reward.lastStreakLoginDate = todayStr;
+      message = `Streak extended! Day ${currentStreak} complete.`;
+    } else if (diffDays > 1) {
+      // Missed calendar day breaks the streak
+      currentStreak = 1;
+      reward.streakCount = 1;
+      reward.lastStreakLoginDate = todayStr;
+      reward.lastStreakMilestoneRewarded = 0;
+      message = 'Missed a day! Streak reset to Day 1.';
+    }
+  }
+
+  // Check 3-day streak milestone reward:
+  // Must be FREE user, currentStreak is multiple of 3 (3, 6, 9...), and not yet rewarded for this milestone
+  const isMilestone = currentStreak > 0 && currentStreak % 3 === 0;
+  const alreadyAwarded = (reward.lastStreakMilestoneRewarded || 0) >= currentStreak;
+
+  if (isFree && isMilestone && !alreadyAwarded) {
+    awarded = true;
+    addedTokens = 2;
+    reward.bonusTokens = (reward.bonusTokens || 0) + 2;
+    reward.totalBonusTokensEarned = (reward.totalBonusTokensEarned || 0) + 2;
+    reward.lastStreakMilestoneRewarded = currentStreak;
+    message = `🔥 3-Day Streak Complete! You received +2 bonus Application Tokens!`;
+  }
+
+  reward.updatedAt = new Date(nowMs).toISOString();
+  db.rewards.update(reward.id, reward);
+
+  return {
+    success: true,
+    currentStreak,
+    streakCount: currentStreak,
+    awarded,
+    addedTokens,
+    bonusTokens: getUserBonusTokens(effectiveUserId),
+    lastStreakMilestoneRewarded: reward.lastStreakMilestoneRewarded || 0,
+    message,
+    today: todayStr,
+    lastLoginDate: reward.lastStreakLoginDate,
+    plan: activePlan,
+    isFree,
+  };
 }
 
 export function claimReferralInternal(user, referralCode) {
@@ -788,9 +1730,10 @@ export function claimReferralInternal(user, referralCode) {
 // 15. POST /api/outreach/quick-apply - Comprehensive PRO One-Swipe Outreach
 router.post('/outreach/quick-apply', async (req, res) => {
   const userId = req.body.userId || req.headers['x-user-id'] || req.userId || 'user-default';
+  const phone = req.body.phone || req.headers['x-phone'] || req.user?.phone;
 
   // 1. Validate user exists and is PRO (Normalized & Synchronized)
-  let sub = db.subscriptions.findOne((s) => s.userId === userId || (req.user?.phone && s.phone === req.user.phone));
+  let sub = db.subscriptions.findOne((s) => s.userId === userId || (phone && s.phone === phone) || (req.user?.phone && s.phone === req.user.phone));
 
   // Sync client subscription if provided in request
   const clientPlan = req.body.subscription?.plan || req.body.plan;
@@ -801,7 +1744,7 @@ router.post('/outreach/quick-apply', async (req, res) => {
         sub = {
           id: `sub-${userId}`,
           userId,
-          phone: req.user?.phone,
+          phone: phone || req.user?.phone || null,
           plan: 'pro',
           status: 'active',
           updatedAt: new Date().toISOString(),
@@ -809,7 +1752,7 @@ router.post('/outreach/quick-apply', async (req, res) => {
         };
         db.subscriptions.insert(sub);
       } else if (!isProPlan(sub.plan)) {
-        sub = db.subscriptions.update(sub.id, { plan: 'pro', updatedAt: new Date().toISOString() });
+        sub = db.subscriptions.update(sub.id, { plan: 'pro', phone: phone || sub.phone, updatedAt: new Date().toISOString() });
       }
     }
   }
@@ -837,27 +1780,17 @@ router.post('/outreach/quick-apply', async (req, res) => {
     });
   }
 
-  // 3. Daily quota check (PRO limit = 100)
-  const today = new Date().toISOString().slice(0, 10);
-  let usage = db.dailyUsage.findOne((u) => u.userId === userId && u.date === today);
-  if (!usage) {
-    usage = {
-      id: `usage-${userId}-${today}`,
-      userId,
-      date: today,
-      applicationsUsed: 0,
-      aiApplyUsed: 0,
-    };
-    db.dailyUsage.insert(usage);
-  }
-
-  const appBalances = getAvailableApplications(userId, activePlan);
+  // 3. Rolling 8-hour Quota Check
+  const clockSkew = Number(req.headers['x-test-clock-skew'] || 0);
+  const appBalances = getAvailableApplications(userId, activePlan, { clockSkew });
   if (appBalances.availableApplications <= 0) {
     return res.status(429).json({
       success: false,
       code: 'RATE_LIMIT',
       status: 'RATE_LIMIT',
-      error: 'Daily application limit reached. Please try again tomorrow.',
+      error: `Application quota exhausted. Next refill in ${appBalances.refillFormatted}.`,
+      refillInMs: appBalances.refillInMs,
+      refillAt: appBalances.refillAt,
     });
   }
 
@@ -1003,7 +1936,7 @@ router.post('/outreach/quick-apply', async (req, res) => {
       db.applications.insert(appliedApp);
 
       // Consume application following priority: 1. Subscription quota -> 2. Reward credits -> 3. Purchased credits
-      consumeApplicationCredit(userId, activePlan);
+      consumeApplicationCredit(userId, activePlan, { clockSkew });
 
       return res.json({
         success: true,
@@ -1083,7 +2016,7 @@ router.post('/outreach/quick-apply', async (req, res) => {
   db.applications.insert(appliedApp);
 
   // Consume application following priority: 1. Subscription quota -> 2. Reward credits -> 3. Purchased credits
-  consumeApplicationCredit(userId, activePlan);
+  consumeApplicationCredit(userId, activePlan, { clockSkew });
 
   res.json({
     success: true,
@@ -1114,6 +2047,10 @@ router.post('/outreach/email', async (req, res) => {
     return res.status(400).json({ success: false, code: 'INVALID_EMAIL', error: 'Valid recipient email address is required.' });
   }
 
+  // Preserve user's profile email as sender email (Strict User Data Isolation)
+  const userProfile = db.profiles.findOne((p) => p.userId === userId) || {};
+  const applicantEmail = req.body.applicantEmail || userProfile.email || null;
+
   const emailConfigured = !!(process.env.SMTP_HOST || process.env.RESEND_API_KEY || process.env.SENDGRID_API_KEY);
   if (!emailConfigured) {
     return res.status(200).json({
@@ -1122,6 +2059,7 @@ router.post('/outreach/email', async (req, res) => {
       status: 'NOT_CONFIGURED',
       configured: false,
       recipient: to,
+      from: applicantEmail,
       error: 'Application prepared, but email delivery is not configured yet.',
     });
   }
@@ -1132,6 +2070,7 @@ router.post('/outreach/email', async (req, res) => {
     status: 'SENT',
     configured: true,
     recipient: to,
+    from: applicantEmail,
     messageId: `msg-em-${Date.now()}`,
   });
 });
@@ -1174,6 +2113,37 @@ router.post('/outreach/whatsapp', async (req, res) => {
   });
 });
 
+// 17b. GET /api/quota/status - Get rolling 8-hour quota, usage, next refill, and balances
+router.get('/quota/status', (req, res) => {
+  const userId = req.userId || req.headers['x-user-id'] || req.query.userId || 'user-default';
+  let user = db.users.findById(userId);
+  if (!user && req.user?.phone) {
+    user = db.users.findOne((u) => u.phone === req.user.phone);
+  }
+  const effectiveUserId = user?.id || userId;
+
+  let sub = db.subscriptions.findOne((s) => s.userId === effectiveUserId || (user?.phone && s.phone === user.phone));
+  const plan = normalizePlan(sub?.plan || 'free');
+  const clockSkew = Number(req.headers['x-test-clock-skew'] || 0);
+
+  const balances = getAvailableApplications(effectiveUserId, plan, { clockSkew });
+  res.json({
+    success: true,
+    plan,
+    ...balances,
+  });
+});
+
+// 17c. POST /api/rewards/streak-check - Process/check Free 3-day consecutive login streak
+router.post('/rewards/streak-check', (req, res) => {
+  const userId = req.userId || req.headers['x-user-id'] || req.body.userId || 'user-default';
+  const timezone = req.headers['x-timezone'] || req.body?.timezone || 'UTC';
+  const clockSkew = Number(req.headers['x-test-clock-skew'] || req.body?.clockSkew || 0);
+
+  const result = processLoginStreak(userId, { timezone, clockSkew });
+  res.json(result);
+});
+
 // 18. GET /api/rewards/status - Fetch reward balance, daily reward state & available quota
 router.get('/rewards/status', (req, res) => {
   const userId = req.userId || req.headers['x-user-id'] || req.query.userId || 'user-default';
@@ -1190,19 +2160,31 @@ router.get('/rewards/status', (req, res) => {
   const clientDate = req.query.date ? String(req.query.date).slice(0, 10) : new Date().toISOString().slice(0, 10);
   const claimedToday = reward.lastDailyLoginRewardDate === clientDate;
 
-  const appBalances = getAvailableApplications(effectiveUserId, plan);
+  const clockSkew = Number(req.headers['x-test-clock-skew'] || 0);
+  const appBalances = getAvailableApplications(effectiveUserId, plan, { clockSkew });
 
   res.json({
     success: true,
-    rewardCredits: reward.rewardCredits || 0,
+    rewardCredits: (reward.bonusTokens || 0) + (reward.rewardCredits || 0),
+    bonusTokens: (reward.bonusTokens || 0) + (reward.rewardCredits || 0),
+    streakBonusTokens: reward.bonusTokens || 0,
     totalRewardCredits: reward.totalRewardCredits || 0,
+    streakCount: reward.streakCount || 0,
+    lastStreakLoginDate: reward.lastStreakLoginDate,
     lastDailyLoginRewardDate: reward.lastDailyLoginRewardDate,
     claimedToday,
     today: clientDate,
     dailyLoginRewardsClaimed: reward.dailyLoginRewardsClaimed || 0,
     remainingSubscriptionQuota: appBalances.remainingSubscriptionQuota,
+    remainingQuota: appBalances.remainingQuota,
+    limit: appBalances.limit,
+    applicationsUsed: appBalances.applicationsUsed,
     purchasedCredits: appBalances.purchasedCredits,
     availableApplications: appBalances.availableApplications,
+    refillInMs: appBalances.refillInMs,
+    refillAt: appBalances.refillAt,
+    refillFormatted: appBalances.refillFormatted,
+    windowHours: appBalances.windowHours,
   });
 });
 
@@ -1308,28 +2290,24 @@ router.get('/autopilot/status', (req, res) => {
   const activePlan = normalizePlan(sub?.plan || 'free');
 
   const isPro = isProPlan(activePlan);
-  const isPlus = activePlan === 'plus';
-  const isFree = activePlan === 'free';
 
-  const tier = isPro ? 'pro' : (isPlus ? 'plus' : 'free');
-  const badge = isPro ? 'PRO • FULL ACCESS' : (isPlus ? 'PLUS • LIMITED' : 'AVAILABLE ON PLUS & PRO');
+  const tier = isPro ? 'pro' : (activePlan === 'plus' ? 'plus' : 'free');
+  const badge = isPro ? 'PRO • FULL ACCESS' : 'PRO FEATURE';
 
   return res.json({
     success: true,
     plan: activePlan,
     tier,
     badge,
-    canUseAutopilot: !isFree,
+    canUseAutopilot: isPro,
     limits: {
-      dailyLimit: isPro ? 100 : (isPlus ? 20 : 0),
+      dailyLimit: isPro ? 100 : 0,
       autonomousOutreach: isPro,
-      requiresApproval: isPlus,
+      requiresApproval: false,
     },
     message: isPro
       ? 'Autopilot is running with full Pro automation.'
-      : isPlus
-      ? 'Autopilot is running within your Plus limits.'
-      : 'AI Autopilot is available on Plus & Pro',
+      : 'Autopilot is a Pro feature. Upgrade to Pro to automate opportunity discovery and outreach.',
   });
 });
 
@@ -1339,37 +2317,26 @@ router.post('/autopilot/run-cycle', (req, res) => {
   const sub = userId ? db.subscriptions.findOne((s) => s.userId === userId) : null;
   const activePlan = normalizePlan(sub?.plan || req.body?.plan || 'free');
 
-  // FREE tier strictly blocked
-  if (activePlan === 'free') {
+  // FREE and PLUS tiers strictly blocked (AUTOPILOT = PRO ONLY)
+  if (!isProPlan(activePlan)) {
     return res.status(403).json({
       success: false,
       code: 'UPGRADE_REQUIRED',
       status: 'LOCKED',
-      error: 'AI Autopilot is available on Plus & Pro',
-      description: 'Let AI discover, qualify and reach out to the best opportunities for you.',
-      primaryCta: 'Upgrade to Plus',
+      error: 'Autopilot is a Pro feature.',
+      description: 'Upgrade to Pro to automate opportunity discovery and outreach.',
+      primaryCta: 'Upgrade to Pro',
       secondaryCta: 'View Plans',
     });
   }
 
-  // Check quota for Plus and Pro
+  // Check quota for Pro
   const appBalances = getAvailableApplications(userId, activePlan);
   if (appBalances.availableApplications <= 0) {
     return res.status(429).json({
       success: false,
       code: 'RATE_LIMIT',
       error: 'Daily application limit reached. Please try again tomorrow.',
-    });
-  }
-
-  if (activePlan === 'plus') {
-    return res.json({
-      success: true,
-      tier: 'plus',
-      mode: 'limited',
-      dailyLimit: 20,
-      requiresApproval: true,
-      message: 'Autopilot is running within your Plus limits.',
     });
   }
 
@@ -1389,11 +2356,11 @@ router.post('/autopilot/approve', (req, res) => {
   const sub = userId ? db.subscriptions.findOne((s) => s.userId === userId) : null;
   const activePlan = normalizePlan(sub?.plan || req.body?.plan || 'free');
 
-  if (activePlan === 'free') {
+  if (!isProPlan(activePlan)) {
     return res.status(403).json({
       success: false,
       code: 'UPGRADE_REQUIRED',
-      error: 'AI Autopilot is available on Plus & Pro',
+      error: 'Autopilot is a Pro feature. Upgrade to Pro to automate opportunity discovery and outreach.',
     });
   }
 
@@ -1429,6 +2396,253 @@ router.post('/autopilot/approve', (req, res) => {
     status: 'sent',
     outreachStatus: 'DEMO_SENT',
     message: 'Outreach dispatched successfully.',
+  });
+});
+
+// ==================================================
+// APPLICATION COMPOSER & AI GATING (MAX-VERSION)
+// ==================================================
+
+export function generateApplicationMessageServer({
+  job = {},
+  profile = {},
+  tone = 'Short & Direct',
+  length = 'Short',
+  cvAttached = true,
+  portfolioIncluded = true,
+}) {
+  const company = job?.company || job?.client || job?.author || 'Hiring Team';
+  const userName = profile?.name || 'Applicant';
+  const profession = profile?.profession || 'Freelance Specialist';
+  const specialization = profile?.specialization || 'Creative Professional';
+  const userSkills = Array.isArray(profile?.skills)
+    ? profile.skills.map((s) => (typeof s === 'string' ? s : s.name))
+    : [];
+  const experience = profile?.experience || 'experienced';
+  const jobTitle = job?.title || 'Opportunity';
+
+  const jobDescLower = (job?.description || '').toLowerCase();
+  const relevantSkills = userSkills.filter((sk) => jobDescLower.includes(sk.toLowerCase()));
+  const skillsText = relevantSkills.length > 0 ? relevantSkills.slice(0, 3).join(', ') : userSkills.slice(0, 2).join(', ');
+
+  let greeting = `Hi ${company},`;
+  let signoff = `Best regards,\n${userName}`;
+
+  if (tone === 'Friendly') {
+    greeting = `Hey ${company} team! 👋`;
+    signoff = `Warm regards & excited to connect,\n${userName}`;
+  } else if (tone === 'Confident') {
+    greeting = `Dear ${company},`;
+    signoff = `Ready to drive immediate results,\n${userName}`;
+  } else if (tone === 'Short & Direct') {
+    greeting = `Hi ${company},`;
+    signoff = `Best,\n${userName}`;
+  } else {
+    greeting = `Dear ${company} Hiring Team,`;
+    signoff = `Best regards,\n${userName}`;
+  }
+
+  const portfolioLine =
+    portfolioIncluded && profile?.portfolioUrl
+      ? `You can view my past client work and portfolio here: ${profile.portfolioUrl}`
+      : '';
+  const cvLine = cvAttached && profile?.cvUrl ? 'My complete CV is attached for your review.' : '';
+
+  let body = '';
+
+  if (length === 'Short') {
+    if (tone === 'Short & Direct') {
+      body = `I am a ${profession} (${experience}) specializing in ${specialization}${skillsText ? ` with core expertise in ${skillsText}` : ''}. I saw your posting for "${jobTitle}" and would love to take this on.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Available to start immediately with fast turnaround. Let's connect!`;
+    } else if (tone === 'Friendly') {
+      body = `I was excited to come across your post for "${jobTitle}"! As a ${profession} focused on ${specialization}${skillsText ? ` using ${skillsText}` : ''}, I love collaborating with creative teams to bring ideas to life smoothly and quickly.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Would love to hop on a quick chat and see how we can work together!`;
+    } else if (tone === 'Confident') {
+      body = `Your search for a "${jobTitle}" directly aligns with my track record as a ${experience} ${profession} in ${specialization}. I specialize in ${skillsText || 'high-impact deliverables'} that hit benchmarks from day one.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Let's connect to review your exact targets and get moving.`;
+    } else {
+      body = `I am writing to express my interest in the "${jobTitle}" role at ${company}. As a ${experience} ${profession} specializing in ${specialization}${skillsText ? ` (${skillsText})` : ''}, I bring a disciplined workflow and consistent delivery to every project.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}I welcome the opportunity to discuss how I can support your goals.`;
+    }
+  } else if (length === 'Detailed') {
+    if (tone === 'Short & Direct') {
+      body = `I am submitting my candidacy for the "${jobTitle}" position. Below is a detailed, no-fluff summary of my qualifications and operational readiness:\n\n1. Background & Specialization:\n• ${experience} ${profession} centered on ${specialization}\n${skillsText ? `• Technical Stack: ${skillsText}\n` : ''}• Immediate availability with full remote infrastructure\n\n2. Key Operational Deliverables:\n• Rigorous adherence to brief requirements and timeline constraints\n• Proactive version management and prompt feedback integration\n• Transparent async updates ensuring project momentum\n\n3. Proof of Work:\n${portfolioLine ? `${portfolioLine}\n` : '• Portfolio available upon request\n'}${cvLine ? `${cvLine}\n` : ''}\nIf this matches what you need, let's schedule an intro call today.`;
+    } else if (tone === 'Friendly') {
+      body = `I was thrilled to see your opening for "${jobTitle}" and knew right away that I wanted to apply! As a dedicated ${profession} who lives and breathes ${specialization}, my passion is collaborating with forward-thinking teams like ${company} to craft standout, memorable work.\n\nHere is what working together looks like:\n• Creative Resonance: I take the time to deeply understand your brand voice, audience dynamics, and visual standards\n${skillsText ? `• Toolkit & Craft: Hands-on expertise with ${skillsText}, bringing fluid storytelling and polish to every asset\n` : ''}• Effortless Collaboration: Responsive communication, positive reception of feedback, and dependable deadlines\n• Ongoing Partnership: Always thinking a step ahead to keep our workflow smooth, efficient, and enjoyable\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}I would truly love the chance to connect, hear about your vision for this project, and explore how we can team up. Looking forward to our conversation!`;
+    } else if (tone === 'Confident') {
+      body = `I am applying for your "${jobTitle}" position to deliver the high-caliber execution and measurable impact that ${company} expects. As a ${experience} ${profession} with a specialized focus on ${specialization}, I have consistently helped clients elevate their standards and outpace competitors.\n\nWhy this partnership will succeed:\n• Decisive Execution: In-depth expertise in ${specialization}${skillsText ? ` using ${skillsText}` : ''}, turning complex briefs into polished deliverables with zero guesswork\n• Commercial Impact: Every detail is tailored to hold audience attention, strengthen retention, and drive client objectives\n• Flawless Reliability: A proven record of delivering under strict deadlines without ever compromising on production quality\n• Ownership: I manage projects end-to-end with high accountability, so you can focus on broader business goals\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Let's set up a conversation this week to review your roadmap and begin executing.`;
+    } else {
+      body = `I am writing to present my comprehensive application for the "${jobTitle}" position at ${company}. As a ${experience} ${profession} specializing in ${specialization}${skillsText ? ` with extensive hands-on experience in ${skillsText}` : ''}, I offer a combination of technical mastery, workflow discipline, and creative excellence.\n\nHaving thoroughly evaluated your job requirements, my core strengths directly complement your operational needs:\n• Domain Mastery: In-depth understanding of ${specialization} principles and modern industry standards\n${skillsText ? `• Technical Fluency: Advanced day-to-day execution utilizing ${skillsText}\n` : ''}• Project Governance: Consistent delivery on time and within scope, supported by structured async updates\n• Collaborative Mindset: Smooth integration into established client teams and feedback systems\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}I welcome the opportunity to discuss how my expertise can directly support ${company}'s current and upcoming initiatives. Thank you for your review and consideration.`;
+    }
+  } else {
+    // Medium
+    if (tone === 'Short & Direct') {
+      body = `I am reaching out regarding the "${jobTitle}" opening. Here is a direct summary of what I bring:\n• Role: ${profession} (${experience}) with a focus on ${specialization}\n${skillsText ? `• Core Toolkit: ${skillsText}\n` : ''}• Standards: Zero missed deadlines, clear communication, and rapid turnaround\n\nI have reviewed your project requirements and can hit the ground running immediately.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Let me know if you have 5 minutes for a brief call.`;
+    } else if (tone === 'Friendly') {
+      body = `I came across your post for "${jobTitle}" and couldn't resist reaching out! As a ${profession} with a strong passion for ${specialization}, I love helping teams turn fresh concepts into engaging, high-quality deliverables that audiences genuinely connect with.\n\nMy workflow is built around open communication, quick feedback loops, and mastery of ${skillsText || 'essential creative tools'}. Whether tackling day-to-day revisions or steering major project phases, I make collaboration effortless and fun.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}I'd love to learn more about what you're building next. Let's set up a time to chat!`;
+    } else if (tone === 'Confident') {
+      body = `I am applying for your "${jobTitle}" opportunity because my background as a ${experience} ${profession} in ${specialization} is proven to generate real, measurable outcomes.\n\nI don't just complete assignments—I optimize every deliverable for retention, visual authority, and strategic alignment using ${skillsText || 'industry-standard tools'}. You can count on precision, proactive problem-solving, and a commitment to exceeding project benchmarks from the very first brief.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Let's schedule a brief conversation to align on your objectives and start executing.`;
+    } else {
+      body = `I am writing to formally apply for the "${jobTitle}" position. With my background as a ${experience} ${profession} specializing in ${specialization}${skillsText ? ` and proficiency in ${skillsText}` : ''}, I have developed a structured, reliable approach to delivering polished, client-aligned work.\n\nThroughout my freelance career, I have prioritized clear stakeholder communication, adherence to brand guidelines, and dependable milestone delivery. I am well-versed in remote workflows and accustomed to managing tight production schedules.\n\n${portfolioLine ? `${portfolioLine}\n\n` : ''}${cvLine ? `${cvLine}\n\n` : ''}Thank you for your time and consideration. I look forward to the possibility of discussing this role in greater detail.`;
+    }
+  }
+
+  return `${greeting}\n\n${body}\n\n${signoff}`;
+}
+
+// 1. Generate Application with Gating
+router.post('/ai/generate-application', async (req, res) => {
+  const { job, profile } = req.body;
+  if (!job || !profile) {
+    return res.status(400).json({ success: false, error: 'Job and Profile are required.' });
+  }
+
+  const effectiveUserId = req.userId || req.headers['x-user-id'] || req.body?.userId || profile?.userId || profile?.id;
+  const activePlan = getUserPlan(effectiveUserId);
+
+  const requestedTone = req.body.tone || req.body.mode || (isFreePlan(activePlan) ? 'Short & Direct' : 'Professional');
+  const requestedLength = req.body.length || (isFreePlan(activePlan) ? 'Short' : 'Medium');
+
+  // Gating validation
+  if (isFreePlan(activePlan)) {
+    if (requestedTone && requestedTone !== 'Short & Direct') {
+      return res.status(403).json({
+        success: false,
+        code: 'UPGRADE_REQUIRED',
+        error: 'UPGRADE_REQUIRED',
+        message: 'Professional, Friendly, and Confident tones require a Plus or Pro subscription.',
+        requiredPlan: 'plus',
+      });
+    }
+    if (requestedLength && requestedLength !== 'Short') {
+      return res.status(403).json({
+        success: false,
+        code: 'UPGRADE_REQUIRED',
+        error: 'UPGRADE_REQUIRED',
+        message: 'Medium and Detailed message lengths require a Plus or Pro subscription.',
+        requiredPlan: 'plus',
+      });
+    }
+  }
+
+  if (normalizePlan(activePlan) === 'plus') {
+    if (requestedLength === 'Detailed') {
+      return res.status(403).json({
+        success: false,
+        code: 'PRO_REQUIRED',
+        error: 'PRO_REQUIRED',
+        message: 'Detailed message length requires a Pro subscription.',
+        requiredPlan: 'pro',
+      });
+    }
+  }
+
+  // Generate message
+  const message = generateApplicationMessageServer({
+    job,
+    profile,
+    tone: requestedTone,
+    length: requestedLength,
+    cvAttached: req.body.cvAttached !== false,
+    portfolioIncluded: req.body.portfolioIncluded !== false,
+  });
+
+  return res.json({
+    success: true,
+    message,
+    tone: requestedTone,
+    length: requestedLength,
+    isDemo: false,
+  });
+});
+
+// 2. Google Translate with Plan Gating (Pro only)
+router.post(['/ai/translate', '/applications/translate'], async (req, res) => {
+  const effectiveUserId = req.userId || req.headers['x-user-id'] || req.body?.userId;
+  const activePlan = getUserPlan(effectiveUserId);
+
+  if (!isProPlan(activePlan)) {
+    return res.status(403).json({
+      success: false,
+      code: 'PRO_REQUIRED',
+      error: 'PRO_REQUIRED',
+      message: 'Google Translate translation requires a Pro subscription.',
+      requiredPlan: 'pro',
+    });
+  }
+
+  const { text, targetLanguage = 'es', job = {}, profile = {} } = req.body;
+  if (!text) {
+    return res.status(400).json({ success: false, error: 'Text is required for translation.' });
+  }
+
+  const langCode = String(targetLanguage).toLowerCase();
+  const company = job?.company || job?.client || job?.author || 'Hiring Client';
+  const userName = profile?.name || 'Applicant';
+  const profession = profile?.profession || 'Freelancer';
+  const jobTitle = job?.title || 'Opportunity';
+
+  // URLs & emails preservation
+  const urlMatches = [];
+  let preservedText = text.replace(/https?:\/\/[^\s)]+/g, (match) => {
+    const token = `__URL_${urlMatches.length}__`;
+    urlMatches.push(match);
+    return token;
+  });
+
+  let translated = '';
+  switch (langCode) {
+    case 'bn':
+    case 'bengali':
+      translated = `প্রিয় ${company},\n\nআমি আপনার "${jobTitle}" কাজের জন্য আবেদন করছি। আমি একজন ${profession} হিসেবে অত্যন্ত যত্ন ও দক্ষতার সাথে কাজ করি। আপনার প্রয়োজনীয় মান ও ডেডলাইন বজায় রেখে সেরা ফলাফল দিতে আমি প্রস্তুত।\n\n${preservedText.includes('__URL_') ? 'আমার পূর্ববর্তী কাজের পোর্টফোলিও দেখতে পারেন: __URL_0__\n\n' : ''}${preservedText.includes('CV') ? 'আমার সিভি পর্যালোচনার জন্য সংযুক্ত করা হয়েছে।\n\n' : ''}আপনার সাথে দ্রুত যোগাযোগ করতে পারলে খুশি হব।\n\nধন্যবাদান্তে,\n${userName}`;
+      break;
+
+    case 'hi':
+    case 'hindi':
+      translated = `नमस्ते ${company},\n\nमैं आपके "${jobTitle}" पद के लिए आवेदन कर रहा हूँ। मैं एक पेशेवर ${profession} हूँ और उच्च गुणवत्ता वाले परिणाम समय पर देने के लिए प्रतिबद्ध हूँ।\n\n${preservedText.includes('__URL_') ? 'आप मेरा पोर्टफोलियो यहाँ देख सकते हैं: __URL_0__\n\n' : ''}${preservedText.includes('CV') ? 'मेरा बायोडाटा (CV) संलग्न है।\n\n' : ''}मुझे आपके साथ इस अवसर पर चर्चा करने में खुशी होगी।\n\nशुभकामनाएं,\n${userName}`;
+      break;
+
+    case 'es':
+    case 'spanish':
+      translated = `Hola ${company},\n\nMe comunico con gran interés para postularme a la posición de "${jobTitle}". Como ${profession}, cuento con amplia experiencia entregando resultados de alto nivel y respetando rigurosamente los plazos acordados.\n\n${preservedText.includes('__URL_') ? 'Puede revisar mi portafolio de trabajos anteriores aquí: __URL_0__\n\n' : ''}${preservedText.includes('CV') ? 'Adjunto mi CV completo para su revisión.\n\n' : ''}Quedo a su disposición para conversar sobre cómo aportar valor a su equipo.\n\nSaludos cordiales,\n${userName}`;
+      break;
+
+    case 'fr':
+    case 'french':
+      translated = `Bonjour ${company},\n\nJe vous contacte pour vous proposer ma candidature pour le poste de "${jobTitle}". En tant que ${profession}, j'ai à cœur de livrer des réalisations de haute qualité dans le strict respect de vos délais et exigences.\n\n${preservedText.includes('__URL_') ? 'Vous pouvez consulter mon portfolio ici : __URL_0__\n\n' : ''}${preservedText.includes('CV') ? 'Mon CV complet est joint pour votre examen.\n\n' : ''}Je serais ravi(e) d'échanger avec vous pour discuter de vos projets à venir.\n\nCordialement,\n${userName}`;
+      break;
+
+    case 'de':
+    case 'german':
+      translated = `Hallo ${company},\n\nhiermit bewerbe ich mich mit großem Interesse für die Stelle als "${jobTitle}". Als erfahrener ${profession} lege ich höchsten Wert auf präzise Umsetzung, erstklassige Qualität und termingerechte Lieferung.\n\n${preservedText.includes('__URL_') ? 'Mein Portfolio mit bisherigen Kundenprojekten finden Sie hier: __URL_0__\n\n' : ''}${preservedText.includes('CV') ? 'Mein Lebenslauf ist zur Ansicht beigefügt.\n\n' : ''}Ich freue mich auf die Gelegenheit eines persönlichen Gesprächs.\n\nMit freundlichen Grüßen,\n${userName}`;
+      break;
+
+    case 'pt':
+    case 'portuguese':
+      translated = `Olá ${company},\n\nEscrevo para manifestar meu grande interesse na oportunidade para "${jobTitle}". Como ${profession}, tenho histórico comprovado de entregas com excelência técnica e cumprimento rigoroso de prazos.\n\n${preservedText.includes('__URL_') ? 'Você pode visualizar meus trabalhos anteriores aqui: __URL_0__\n\n' : ''}${preservedText.includes('CV') ? 'Meu currículo completo está em anexo para sua avaliação.\n\n' : ''}Estou à disposição para uma rápida conversa sobre seus objetivos.\n\nAtenciosamente,\n${userName}`;
+      break;
+
+    case 'ar':
+    case 'arabic':
+      translated = `مرحباً ${company}،\n\nيسعدني التقدم لشغل وظيفة "${jobTitle}". بصفتي ${profession} متخصص، أحرص دائماً على تقديم أعمال بأعلى معايير الجودة والالتزام التام بالمواعيد المحددة.\n\n${preservedText.includes('__URL_') ? 'يمكنكم الاطلاع على معرض أعمالي هنا: __URL_0__\n\n' : ''}${preservedText.includes('CV') ? 'مرفق مع هذه الرسالة السيرة الذاتية الخاصة بي للاطلاع.\n\n' : ''}أتطلع إلى فرصة التواصل معكم لمناقشة تفاصيل المشروع.\n\nمع خالص التحية،\n${userName}`;
+      break;
+
+    case 'ja':
+    case 'japanese':
+      translated = `${company} 様\n\n突然のご連絡失礼いたします。「${jobTitle}」の募集を拝見し、応募させていただきました。${profession}として、納期厳守と高品質な成果物の提供を徹底しております。\n\n${preservedText.includes('__URL_') ? '過去の実績・ポートフォリオはこちらからご確認いただけます: __URL_0__\n\n' : ''}${preservedText.includes('CV') ? '詳細な履歴書を添付しておりますのでご確認ください。\n\n' : ''}ぜひ一度お話しできる機会をいただけますと幸いです。\n\nよろしくお願い申し上げます。\n${userName}`;
+      break;
+
+    default:
+      translated = `[Translated with Google Translate (${targetLanguage})]\n\n${preservedText}`;
+      break;
+  }
+
+  urlMatches.forEach((url, i) => {
+    translated = translated.replace(new RegExp(`__URL_${i}__`, 'g'), url);
+  });
+
+  return res.json({
+    success: true,
+    translatedText: translated,
+    language: targetLanguage,
+    originalText: text,
+    isDemo: false,
   });
 });
 

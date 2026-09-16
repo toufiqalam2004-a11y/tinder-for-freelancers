@@ -203,3 +203,25 @@ export function normalizeWhatsAppNumber(phoneStr = '', defaultCountryCode = '+91
   return digits;
 }
 
+export function isValidEmail(email) {
+  if (!email || typeof email !== 'string') return false;
+  const trimmed = email.trim();
+  if (!trimmed) return false;
+  // Standard RFC-compliant email regex: rejects spaces, missing @, missing domain, missing top-level domain
+  const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
+  return emailRegex.test(trimmed);
+}
+
+export function isValidUsername(username) {
+  if (!username || typeof username !== 'string') return false;
+  const trimmed = username.trim();
+  if (!trimmed) return false;
+  // Allows 3-30 chars: letters, numbers, underscores, dots, hyphens (cannot contain spaces or @)
+  const usernameRegex = /^[a-zA-Z0-9_.-]{3,30}$/;
+  return usernameRegex.test(trimmed);
+}
+
+export function normalizeUsername(username) {
+  if (!username || typeof username !== 'string') return '';
+  return username.trim().toLowerCase();
+}

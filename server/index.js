@@ -5,6 +5,8 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import apiRouter, { performServerAutoDelete } from './routes/api.js';
+import adminRouter from './routes/admin.js';
+import { activeSessions } from './sessions.js';
 import { db } from './database.js';
 import { redditService } from './services/redditService.js';
 import { youtubeService } from './services/youtubeService.js';
@@ -22,36 +24,111 @@ const PORT = process.env.PORT || 5000;
 const HOST = process.env.HOST || '0.0.0.0';
 const IS_PROD = process.env.NODE_ENV === 'production';
 
-// 1. Strict CORS Configuration
+// Security Check: Fail safely in production if ADMIN_SECRET_KEY is missing or using known default development value
+if (IS_PROD) {
+  const secret = process.env.ADMIN_SECRET_KEY;
+  if (!secret || typeof secret !== 'string' || secret.trim() === '' || secret.trim() === 'tf-admin-secret-2026') {
+    console.error('[FATAL SECURITY ERROR] In production (NODE_ENV=production), ADMIN_SECRET_KEY must be configured with a secure non-default secret. Server startup aborted.');
+    process.exit(1);
+  }
+}
+
+// 1. Strict CORS Configuration supporting Subdomain Topology
 const railwayOrigin = process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null;
-const allowedOrigins = IS_PROD
-  ? [
-      process.env.FRONTEND_ORIGIN,
-      process.env.FRONTEND_URL,
-      process.env.APP_URL,
-      railwayOrigin,
-      'http://localhost:3000',
-    ].filter(Boolean)
-  : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+
+function parseOrigins(val) {
+  if (!val) return [];
+  return String(val)
+    .split(',')
+    .map((s) => s.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+}
+
+const configuredOrigins = [
+  ...parseOrigins(process.env.ALLOWED_ORIGINS),
+  ...parseOrigins(process.env.FRONTEND_ORIGIN),
+  ...parseOrigins(process.env.FRONTEND_URL),
+  ...parseOrigins(process.env.APP_URL),
+  ...parseOrigins(process.env.ADMIN_URL),
+  ...parseOrigins(process.env.API_URL),
+  railwayOrigin,
+].filter(Boolean);
+
+// Extract base hostnames from configured production origins to support subdomains
+// e.g., if https://yourdomain.com is configured, allow *.yourdomain.com
+const allowedBaseDomains = configuredOrigins
+  .map((originStr) => {
+    try {
+      const parsed = new URL(originStr);
+      const hostParts = parsed.hostname.split('.');
+      if (hostParts.length >= 2) {
+        return hostParts.slice(-2).join('.');
+      }
+      return parsed.hostname;
+    } catch {
+      return null;
+    }
+  })
+  .filter(Boolean);
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true; // Mobile apps, curl, server-to-server
+
+  // Development: allow localhost, 127.0.0.1, LAN IPs
+  if (!IS_PROD) {
+    if (
+      origin === 'http://localhost:3000' ||
+      origin === 'http://127.0.0.1:3000' ||
+      /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)
+    ) {
+      return true;
+    }
+  }
+
+  // Exact match against any configured origin
+  if (configuredOrigins.includes(origin)) {
+    return true;
+  }
+
+  // Railway deployment origins
+  if (origin.endsWith('.railway.app') || origin.endsWith('.up.railway.app')) {
+    return true;
+  }
+
+  // Subdomain matching against configured production base domains (e.g. app.yourdomain.com, admin.yourdomain.com)
+  try {
+    const originHost = new URL(origin).hostname;
+    for (const baseDomain of allowedBaseDomains) {
+      if (baseDomain && (originHost === baseDomain || originHost.endsWith(`.${baseDomain}`))) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
+};
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, server-to-server) or Railway / LAN
-      if (
-        !origin ||
-        allowedOrigins.includes(origin) ||
-        origin.endsWith('.railway.app') ||
-        origin.endsWith('.up.railway.app') ||
-        (!IS_PROD && (/^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)))
-      ) {
+      if (isAllowedOrigin(origin)) {
         callback(null, true);
       } else {
         callback(new Error('CORS policy violation: Origin not allowed.'));
       }
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-user-id',
+      'x-admin-key',
+      'x-phone',
+      'x-enable-demo-outreach',
+      'x-test-clock-skew',
+    ],
     credentials: true,
   })
 );
@@ -108,7 +185,7 @@ const aiLimiter = createRateLimiter(15, 60 * 1000);   // Max 15 AI gens/min
 app.use(globalLimiter);
 
 // 4. Token-Based Authentication Middleware
-const activeSessions = new Map(); // token -> { userId, phone, expiresAt }
+// activeSessions is imported from ./sessions.js
 
 export function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -129,6 +206,18 @@ export function authenticateToken(req, res, next) {
     return res.status(403).json({ success: false, error: 'Invalid or expired session token.' });
   }
 
+  const user = db.users.findOne((u) => u.id === session.userId);
+  if (user && user.status === 'banned') {
+    if (user.banType === 'temporary' && user.banUntil && Date.now() >= new Date(user.banUntil).getTime()) {
+      user.status = 'active';
+      user.banType = null;
+      user.banUntil = null;
+      db.users.update(user.id, user);
+    } else {
+      return res.status(403).json({ success: false, error: 'USER_BANNED' });
+    }
+  }
+
   req.user = { id: session.userId, phone: session.phone };
   next();
 }
@@ -140,8 +229,22 @@ app.use((req, res, next) => {
   if (token && activeSessions.has(token)) {
     const session = activeSessions.get(token);
     if (Date.now() <= session.expiresAt) {
-      req.user = { id: session.userId, phone: session.phone };
-      req.userId = session.userId;
+      const user = db.users.findOne((u) => u.id === session.userId);
+      let isBanned = false;
+      if (user && user.status === 'banned') {
+        if (user.banType === 'temporary' && user.banUntil && Date.now() >= new Date(user.banUntil).getTime()) {
+          user.status = 'active';
+          user.banType = null;
+          user.banUntil = null;
+          db.users.update(user.id, user);
+        } else {
+          isBanned = true;
+        }
+      }
+      if (!isBanned) {
+        req.user = { id: session.userId, phone: session.phone };
+        req.userId = session.userId;
+      }
     }
   }
   next();
@@ -316,7 +419,7 @@ app.post('/api/auth/send-otp', authLimiter, (req, res) => {
 
   // Demo mode is active unless explicitly disabled by ENABLE_DEMO_OTP === 'false'
   const allowDemoOtp = process.env.ENABLE_DEMO_OTP !== 'false';
-  const code = allowDemoOtp ? '123456' : Math.floor(100000 + Math.random() * 900000).toString();
+  const code = allowDemoOtp ? '1234' : Math.floor(1000 + Math.random() * 9000).toString();
 
   // If a new OTP is requested, invalidate any previous OTP and overwrite with fresh parameters
   otpStore.set(sanitizedPhone, {
@@ -331,12 +434,12 @@ app.post('/api/auth/send-otp', authLimiter, (req, res) => {
 
   res.json({
     success: true,
-    message: allowDemoOtp ? 'OTP sent successfully (Demo code: 123456).' : 'Verification code sent to your phone.',
+    message: allowDemoOtp ? 'OTP sent successfully (Demo code: 1234).' : 'Verification code sent to your phone.',
     phone: sanitizedPhone,
     countryCode: validation.countryCode,
     localNumber: validation.localNumber,
     isDemo: allowDemoOtp,
-    demoCode: allowDemoOtp ? '123456' : null,
+    demoCode: allowDemoOtp ? '1234' : null,
     cooldownSeconds: 60,
   });
 });
@@ -348,12 +451,12 @@ app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
     return res.status(400).json({ success: false, error: validation.error });
   }
 
-  if (!code || typeof code !== 'string') {
-    return res.status(400).json({ success: false, error: 'Phone and 6-digit OTP code are required.' });
+  if (!code || typeof code !== 'string' && typeof code !== 'number') {
+    return res.status(400).json({ success: false, error: 'Phone and OTP code are required.' });
   }
 
   const sanitizedPhone = validation.normalizedNumber;
-  const cleanCode = code.trim();
+  const cleanCode = String(code).trim();
   const record = otpStore.get(sanitizedPhone);
   const now = Date.now() + (IS_PROD ? 0 : Number(req.headers['x-test-clock-skew'] || 0));
 
@@ -406,6 +509,7 @@ app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
   otpStore.delete(sanitizedPhone);
 
   let user = db.users.findOne((u) => u.phone === sanitizedPhone);
+  const isBrandNewUser = !user;
   if (!user) {
     user = {
       id: `user-${Date.now()}`,
@@ -416,10 +520,43 @@ app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
       createdAt: new Date().toISOString(),
     };
     db.users.insert(user);
+
+    // Initialize clean FREE subscription in database for new user
+    const existingSub = db.subscriptions.findOne((s) => s.userId === user.id || s.phone === sanitizedPhone);
+    if (!existingSub) {
+      db.subscriptions.insert({
+        id: `sub-${user.id}`,
+        userId: user.id,
+        phone: sanitizedPhone,
+        plan: 'free',
+        status: 'active',
+        currency: 'INR',
+        price: 0,
+        startDate: new Date().toISOString(),
+        endDate: null,
+        credits: [],
+        isDemo: true,
+        updatedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      });
+    }
   } else if (!user.countryCode || !user.localNumber) {
     user.countryCode = validation.countryCode;
     user.localNumber = validation.localNumber;
     db.users.update(user.id, user);
+  }
+
+  // Ban Check
+  if (user && user.status === 'banned') {
+    if (user.banType === 'temporary' && user.banUntil && Date.now() >= new Date(user.banUntil).getTime()) {
+      // Auto unban
+      user.status = 'active';
+      user.banType = null;
+      user.banUntil = null;
+      db.users.update(user.id, user);
+    } else {
+      return res.status(403).json({ success: false, error: 'USER_BANNED' });
+    }
   }
 
   // Create session with 7-day expiration
@@ -429,6 +566,7 @@ app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
     phone: sanitizedPhone,
     countryCode: validation.countryCode,
     localNumber: validation.localNumber,
+    role: user.role || 'user',
     expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
   });
 
@@ -440,6 +578,7 @@ app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
       countryCode: validation.countryCode,
       localNumber: validation.localNumber,
       name: user.name,
+      role: user.role || 'user',
     },
     token,
   });
@@ -470,19 +609,13 @@ if (!IS_PROD) {
   });
 }
 
+// 6.5 Mount Private Admin API router
+app.use('/api/admin', adminRouter);
+
 // 7. Mount API router
 app.use('/api', apiRouter);
 
-// 8. AI Application Generation Endpoint (Rate Limited & Protected)
-app.post('/api/ai/generate-application', aiLimiter, async (req, res) => {
-  const { job, profile, mode } = req.body;
-  if (!job || !profile) {
-    return res.status(400).json({ success: false, error: 'Job and Profile are required.' });
-  }
 
-  const result = await aiService.generatePersonalizedOutreach({ job, profile, mode });
-  res.json(result);
-});
 
 // 9. Data Migration Endpoint with User Scoping
 app.post('/api/data/migrate', (req, res) => {
@@ -514,6 +647,24 @@ app.post('/api/data/migrate', (req, res) => {
       applications: db.applications.count(),
     },
   });
+});
+
+// Dedicated APK Download Endpoint with proper Android MIME type
+app.get(['/app-release.apk', '/api/download/apk'], (req, res) => {
+  const publicApk = path.join(__dirname, '../public/app-release.apk');
+  const distApk = path.join(__dirname, '../dist/app-release.apk');
+  const apkPath = fs.existsSync(publicApk) ? publicApk : (fs.existsSync(distApk) ? distApk : null);
+
+  if (!apkPath) {
+    return res.status(404).json({
+      success: false,
+      error: 'APK release package is currently unavailable.',
+    });
+  }
+
+  res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+  res.setHeader('Content-Disposition', 'attachment; filename="app-release.apk"');
+  res.download(apkPath, 'app-release.apk');
 });
 
 // Static Frontend Serving for Production (Unified Deployment)

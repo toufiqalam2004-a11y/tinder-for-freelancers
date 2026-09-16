@@ -36,13 +36,13 @@ export class AutopilotEngine {
    * Runs an autonomous discovery, qualification, and outreach preparation cycle.
    */
   async runCycle(userProfile = {}) {
-    // 1. Subscription Plan Gating: Free strictly blocked
-    if (subscriptionService.isFree()) {
+    // 1. Subscription Plan Gating: AUTOPILOT = PRO ONLY
+    if (!subscriptionService.isPro()) {
       return {
         success: false,
         code: 'UPGRADE_REQUIRED',
-        reason: 'AI Autopilot is available on Plus & Pro',
-        description: 'Let AI discover, qualify and reach out to the best opportunities for you.',
+        reason: 'Autopilot is a Pro feature.',
+        description: 'Upgrade to Pro to automate opportunity discovery and outreach.',
       };
     }
 
@@ -200,12 +200,12 @@ export class AutopilotEngine {
    * Approves a lead's message and executes send based on control mode.
    */
   async approveOutreach(leadId, userProfile = {}) {
-    // 1. Subscription Plan Gating
-    if (subscriptionService.isFree()) {
+    // 1. Subscription Plan Gating: AUTOPILOT = PRO ONLY
+    if (!subscriptionService.isPro()) {
       return {
         success: false,
         code: 'UPGRADE_REQUIRED',
-        reason: 'AI Autopilot is available on Plus & Pro',
+        reason: 'Autopilot is a Pro feature. Upgrade to Pro to automate opportunity discovery and outreach.',
       };
     }
 

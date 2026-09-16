@@ -47,9 +47,9 @@ function safeDispatchEvent(name, detail) {
   } catch {}
 }
 
-const API_BASE = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL)
-  ? import.meta.env.VITE_API_BASE_URL.replace(/\/+$/, '')
-  : '/api';
+import { getApiBaseUrl } from '../config/apiConfig.js';
+
+const API_BASE = getApiBaseUrl();
 
 function getStoredToken() {
   try {
@@ -267,6 +267,42 @@ export class RewardService {
       }
       return data;
     } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  /**
+   * API: Check / Process Free 3-Day Consecutive Login Streak
+   */
+  async checkLoginStreak(timezone = null) {
+    const token = getStoredToken();
+    const userId = getStoredUserId();
+    const tz = timezone || (typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC');
+
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      if (userId) headers['x-user-id'] = userId;
+
+      const res = await fetch(`${API_BASE}/rewards/streak-check`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ timezone: tz }),
+      });
+
+      const data = await res.json();
+      if (data && data.success) {
+        if (data.bonusTokens !== undefined) {
+          this.setRewardCache({
+            rewardCredits: data.bonusTokens,
+            bonusTokens: data.bonusTokens,
+            streakCount: data.currentStreak,
+          });
+        }
+      }
+      return data;
+    } catch (e) {
+      console.warn('Failed to check login streak on server:', e);
       return { success: false, error: e.message };
     }
   }

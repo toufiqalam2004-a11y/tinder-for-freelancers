@@ -176,7 +176,7 @@ export default function AddSourceModal({
       }
 
       if (sourceData) {
-        const created = addSource(sourceData);
+        const created = await addSource(sourceData);
         // Instant check & ingest
         await refreshSource(created.id);
         toast.success(`${created.name} added and synced!`);
@@ -185,7 +185,13 @@ export default function AddSourceModal({
       }
     } catch (err) {
       console.error(err);
-      setError('Failed to add source. Please try again.');
+      if (err.code === 'SOURCE_LIMIT_REACHED') {
+        setError(err.message || 'Custom source limit reached for your plan.');
+      } else if (err.code === 'DUPLICATE_SOURCE') {
+        setError('This source has already been added to your account.');
+      } else {
+        setError(err.message || 'Failed to add source. Please try again.');
+      }
     } finally {
       setLoading(false);
     }

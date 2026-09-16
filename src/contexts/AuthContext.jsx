@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { getAuth, setAuth as persistAuth, getSessionPhoto, saveSessionPhoto, removeSessionPhoto, clearAllSessionPhotos } from '../data/storage.js';
+import { getAuth, setAuth as persistAuth, getSessionPhoto, saveSessionPhoto, removeSessionPhoto, clearAllSessionPhotos, clearActiveUserSessionStorage } from '../data/storage.js';
 import { apiClient } from '../services/apiClient.js';
 import { validatePhoneNumber } from '../utils/validators.js';
 import { subscriptionService } from '../services/subscriptionService.js';
@@ -9,7 +9,7 @@ import { rewardService } from '../services/rewardService.js';
 
 const AuthContext = createContext(null);
 
-const DEMO_OTP = '123456';
+const DEMO_OTP = '1234';
 
 export function AuthProvider({ children }) {
   const initialAuth = getAuth() || {};
@@ -29,7 +29,7 @@ export function AuthProvider({ children }) {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
   const [isDemo, setIsDemo] = useState(true);
-  const [demoCode, setDemoCode] = useState('123456');
+  const [demoCode, setDemoCode] = useState('1234');
   const [plan, setPlan] = useState(() => subscriptionService.getSubscription().plan);
 
   // Session-scoped profile photo
@@ -93,7 +93,7 @@ export function AuthProvider({ children }) {
         setCountryCode(finalCc);
         setLocalNumber(finalLocal);
         setIsDemo(result.isDemo !== false);
-        setDemoCode(result.demoCode || (result.isDemo !== false ? '123456' : ''));
+        setDemoCode(result.demoCode || (result.isDemo !== false ? '1234' : ''));
         setVerificationId(result.verificationId || 'otp-session');
         persistAuth({
           isAuthenticated: false,
@@ -127,9 +127,9 @@ export function AuthProvider({ children }) {
 
       if (result.success) {
         setIsAuthenticated(true);
-        // Every new login session starts with an empty profile-photo state
+        // Every new login session starts with a clean slate
         setProfilePhotoState(null);
-        clearAllSessionPhotos();
+        clearActiveUserSessionStorage();
         persistAuth({
           isAuthenticated: true,
           phone,
@@ -163,6 +163,13 @@ export function AuthProvider({ children }) {
             toast.success('🎁 Daily Login Reward\n+1 application credit added!', { duration: 4000 });
           }
         }).catch(() => {});
+
+        // Free 3-Day consecutive login streak reward check
+        rewardService.checkLoginStreak().then((streakRes) => {
+          if (streakRes?.awarded) {
+            toast.success('🔥 3-Day Streak Complete!\n+2 bonus Application Tokens awarded!', { duration: 5000 });
+          }
+        }).catch(() => {});
       } else {
         setAuthError(result.error || 'Invalid OTP. Please try again.');
       }
@@ -185,8 +192,12 @@ export function AuthProvider({ children }) {
     setPhone('');
     setVerificationId(null);
     setProfilePhotoState(null);
-    clearAllSessionPhotos();
+    clearActiveUserSessionStorage();
+    setPlan('free');
     persistAuth({ isAuthenticated: false, phone: '', userId: '' });
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('tf_subscription_changed', { detail: { plan: 'free' } }));
+    }
   }, []);
 
   return (
@@ -204,7 +215,7 @@ export function AuthProvider({ children }) {
         logout,
         isDemo,
         demoCode,
-        DEMO_OTP: isDemo ? (demoCode || '123456') : null,
+        DEMO_OTP: isDemo ? (demoCode || '1234') : null,
         plan,
         isPro: isProPlan(plan),
         profilePhoto,

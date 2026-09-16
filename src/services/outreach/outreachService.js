@@ -13,10 +13,12 @@ import { aiService } from '../aiService.js';
 import { featureAccess } from '../featureAccessService.js';
 import { calculateProMatch } from '../proMatchEngine.js';
 import { usageService } from '../usageService.js';
-import { isJobAppliedByUser, getApplicationByJobId, getAuth, addApplication } from '../../data/storage.js';
+import { isJobAppliedByUser, getApplicationByJobId, getAuth, addApplication, getCurrentUserId } from '../../data/storage.js';
 import { createApplication } from '../../data/models.js';
 import { extractContactInfo } from '../../utils/contactExtractor.js';
 import { subscriptionService } from '../subscriptionService.js';
+import { normalizePlan } from '../../utils/planUtils.js';
+import { getApiUrl } from '../../config/apiConfig.js';
 
 export class OutreachService {
   /**
@@ -25,7 +27,7 @@ export class OutreachService {
   async getOutreachStatus() {
     try {
       if (typeof fetch !== 'undefined') {
-        const res = await fetch('/api/outreach/status').catch(() => null);
+        const res = await fetch(getApiUrl('/outreach/status')).catch(() => null);
         if (res && res.ok) {
           const data = await res.json();
           return {
@@ -94,7 +96,8 @@ export class OutreachService {
    */
   async executeAutoOutreach({ job, profile, preferences = {}, isAutopilot = false }) {
     // 1. PRO Membership Gating
-    if (!featureAccess.isProEnabled()) {
+    const isPro = subscriptionService.isPro() || featureAccess.isProEnabled();
+    if (!isPro) {
       return {
         success: false,
         code: 'PRO_REQUIRED',
@@ -122,9 +125,10 @@ export class OutreachService {
 
     // 3. Idempotency Check: prevent duplicate application
     const auth = getAuth() || {};
-    const currentUserId = auth.phone || auth.userId || profile?.id || 'user-default';
+    const currentUserId = getCurrentUserId();
+    const currentPhone = auth.phone || null;
 
-    if (isJobAppliedByUser(job.id, currentUserId)) {
+    if (isJobAppliedByUser(job.id, currentUserId) || (currentPhone && isJobAppliedByUser(job.id, currentPhone))) {
       return {
         success: false,
         code: 'DUPLICATE',
@@ -150,7 +154,8 @@ export class OutreachService {
         success: false,
         code: 'RATE_LIMIT',
         status: 'RATE_LIMIT',
-        error: quotaCheck.reason || 'Daily application limit reached.',
+        error: quotaCheck.reason || 'Application quota exhausted.',
+        refillFormatted: quotaCheck.refillFormatted,
       };
     }
 
@@ -216,9 +221,11 @@ export class OutreachService {
     const headers = { 'Content-Type': 'application/json' };
     if (auth.token) headers['Authorization'] = `Bearer ${auth.token}`;
     if (currentUserId) headers['x-user-id'] = currentUserId;
+    if (currentPhone) headers['x-phone'] = currentPhone;
 
     try {
-      const res = await fetch('/api/outreach/quick-apply', {
+      const activeSub = subscriptionService.getSubscription();
+      const res = await fetch(getApiUrl('/outreach/quick-apply'), {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -232,9 +239,13 @@ export class OutreachService {
             quickApplyEnabled: true,
             contactPreference: userPreference,
           },
-          subscription: subscriptionService.getSubscription(),
+          subscription: {
+            ...activeSub,
+            plan: normalizePlan(activeSub?.plan || 'pro'),
+          },
           isAutopilot,
           userId: currentUserId,
+          phone: currentPhone,
         }),
       });
 

@@ -10,7 +10,7 @@ import PageTransition from '../components/PageTransition';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import SkillTag from '../components/SkillTag';
-import { getJobById, updateJobStatus } from '../data/storage.js';
+import { getJobById, updateJobStatus, recordJobView } from '../data/storage.js';
 import { JOB_TYPE_LABELS } from '../utils/constants';
 
 const JobDetails = () => {
@@ -24,6 +24,7 @@ const JobDetails = () => {
     if (data) {
       setJob(data);
       setIsSaved(data.status === 'saved');
+      recordJobView(id);
     } else {
       toast.error('Job not found');
       navigate(-1);

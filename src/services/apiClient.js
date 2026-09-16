@@ -4,10 +4,10 @@
  * Automatically falls back to Demo Mode if backend is unreachable.
  */
 
+import { getApiBaseUrl } from '../config/apiConfig.js';
+
 // Dynamically configurable production/development API base
-const API_BASE = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL)
-  ? import.meta.env.VITE_API_BASE_URL.replace(/\/+$/, '')
-  : '/api';
+const API_BASE = getApiBaseUrl();
 
 export const apiClient = {
   /**
@@ -138,18 +138,59 @@ export const apiClient = {
   /**
    * Request AI application generation via server
    */
-  async generateApplication({ job, profile, mode }) {
+  async generateApplication({ job, profile, mode, tone, length, userId }) {
     try {
+      const currentUid = userId || profile?.userId || profile?.id || localStorage.getItem('tf_current_user_id');
+      const headers = { 'Content-Type': 'application/json' };
+      if (currentUid) headers['x-user-id'] = currentUid;
+
       const res = await fetch(`${API_BASE}/ai/generate-application`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job, profile, mode }),
+        headers,
+        body: JSON.stringify({ job, profile, mode: tone || mode, tone: tone || mode, length, userId: currentUid }),
       });
+      if (res.status === 403) {
+        const errorData = await res.json().catch(() => ({}));
+        const err = new Error(errorData.message || 'Upgrade required for this tone or length.');
+        err.status = 403;
+        err.code = errorData.code || errorData.error || 'UPGRADE_REQUIRED';
+        throw err;
+      }
       if (!res.ok) throw new Error(`AI request failed: ${res.status}`);
       return await res.json();
-    } catch {
+    } catch (err) {
+      if (err.status === 403 || err.code === 'UPGRADE_REQUIRED' || err.code === 'PRO_REQUIRED') {
+        throw err;
+      }
       return { isDemo: true, message: null };
     }
+  },
+
+  /**
+   * Google Translate Application Message Endpoint
+   */
+  async translateApplication({ text, targetLanguage = 'es', job, profile, userId }) {
+    const currentUid = userId || profile?.userId || profile?.id || localStorage.getItem('tf_current_user_id');
+    const headers = { 'Content-Type': 'application/json' };
+    if (currentUid) headers['x-user-id'] = currentUid;
+
+    const res = await fetch(`${API_BASE}/ai/translate`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ text, targetLanguage, job, profile, userId: currentUid }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 403) {
+      const err = new Error(data.message || 'Google Translate is available on the Pro plan.');
+      err.status = 403;
+      err.code = data.code || data.error || 'PRO_REQUIRED';
+      throw err;
+    }
+    if (!res.ok) {
+      throw new Error(data.error || `Translation request failed with status ${res.status}`);
+    }
+    return data;
   },
 
   /**
@@ -218,6 +259,35 @@ export const apiClient = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ referralCode }),
+      });
+      return await res.json();
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Fetch rolling 8-hour quota status & balances
+   */
+  async getQuotaStatus(userId = null) {
+    try {
+      const q = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+      const res = await fetch(`${API_BASE}/quota/status${q}`);
+      return await res.json();
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  /**
+   * Process & check Free 3-day consecutive login streak
+   */
+  async checkLoginStreak(timezone = null) {
+    try {
+      const res = await fetch(`${API_BASE}/rewards/streak-check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ timezone }),
       });
       return await res.json();
     } catch (err) {

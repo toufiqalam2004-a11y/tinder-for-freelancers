@@ -9,7 +9,7 @@
     "start": "node server/index.js",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/quickApplyAndOutreach.test.js && node tests/rewardsAndReferrals.test.js"
+    "test": "node tests/cleanFixtures.js && node tests/quickApplyAndOutreach.test.js && node tests/rewardsAndReferrals.test.js && node tests/maxQuotaAndStreak.test.js && node tests/applicationComposerGating.test.js && node tests/swipeApplyGating.test.js && node tests/applicationsPage.test.js && node tests/newUserAndFeed.test.js && node tests/autopilotAccessGating.test.js && node tests/sourceManagementGating.test.js && node tests/jobLifecycleSync.test.js && node --test tests/adminRealUserDataSync.test.js && node --test tests/adminSecurityAndEndpoints.test.js && node --test tests/adminUserAppSourceSync.test.js && node --test tests/adminTopUpMonitoring.test.js && node --test tests/apkDownloadFlow.test.js && node tests/mainAppFinalPolish.test.js && node --test tests/threeWebsiteArchitecture.test.js && node tests/subscriptionLifecycleAndIsolation.test.js && node --test tests/nameNumberingAndPhoneUi.test.js && node --test tests/adminResetAppData.test.js && node --test tests/uniqueUsernameAndMandatoryEmail.test.js && node tests/cleanFixtures.js"
   },
   "dependencies": {
     "cors": "^2.8.6",

@@ -1,3 +1,45 @@
+import {
+  APPLICATION_QUOTA_WINDOW_HOURS,
+  APPLICATION_QUOTA_WINDOW_MS,
+  FREE_APPLICATION_QUOTA,
+  PLUS_APPLICATION_QUOTA,
+  PRO_APPLICATION_QUOTA,
+  STREAK_BONUS_TOKENS,
+  STREAK_DAYS_REQUIRED,
+  PLAN_QUOTA_CONFIG,
+  getPlanQuotaConfig,
+  getApplicationsPerWindow,
+  getQuotaWindowHours,
+  formatWindowCountdown,
+} from './quotaConfig.js';
+import {
+  FREE_CUSTOM_SOURCE_LIMIT,
+  PLUS_CUSTOM_SOURCE_LIMIT,
+  PRO_CUSTOM_SOURCE_LIMIT,
+  CUSTOM_SOURCE_LIMITS,
+  getCustomSourceLimit,
+} from './sourceConfig.js';
+
+export {
+  APPLICATION_QUOTA_WINDOW_HOURS,
+  APPLICATION_QUOTA_WINDOW_MS,
+  FREE_APPLICATION_QUOTA,
+  PLUS_APPLICATION_QUOTA,
+  PRO_APPLICATION_QUOTA,
+  STREAK_BONUS_TOKENS,
+  STREAK_DAYS_REQUIRED,
+  PLAN_QUOTA_CONFIG,
+  getPlanQuotaConfig,
+  getApplicationsPerWindow,
+  getQuotaWindowHours,
+  formatWindowCountdown,
+  FREE_CUSTOM_SOURCE_LIMIT,
+  PLUS_CUSTOM_SOURCE_LIMIT,
+  PRO_CUSTOM_SOURCE_LIMIT,
+  CUSTOM_SOURCE_LIMITS,
+  getCustomSourceLimit,
+};
+
 export const PLATFORMS = {
   FACEBOOK_GROUP: 'facebook_group',
   REDDIT: 'reddit',
@@ -293,12 +335,23 @@ export const SUBSCRIPTION_PLANS = {
     badge: null,
     tagline: 'Basic discovery & starter limits',
     prices: {
+      monthly: {
+        INR: 0,
+        USD: 0,
+      },
+      annual: {
+        INR: 0,
+        USD: 0,
+      },
       INR: 0,
       USD: 0,
     },
     limits: {
-      applicationsPerDay: 5,
-      sources: 2,
+      applicationsPerWindow: FREE_APPLICATION_QUOTA,
+      applicationsPerDay: FREE_APPLICATION_QUOTA,
+      quotaWindowHours: APPLICATION_QUOTA_WINDOW_HOURS,
+      sources: FREE_CUSTOM_SOURCE_LIMIT,
+      customSources: FREE_CUSTOM_SOURCE_LIMIT,
       aiApplyPerDay: 2,
       savedSearches: 2,
       themePresets: 3,
@@ -311,8 +364,8 @@ export const SUBSCRIPTION_PLANS = {
       followUps: false,
     },
     features: [
-      '5 Applications per day',
-      '2 Active Job Sources',
+      `${FREE_APPLICATION_QUOTA} Applications per ${APPLICATION_QUOTA_WINDOW_HOURS}-hour window`,
+      `${FREE_CUSTOM_SOURCE_LIMIT} Custom Job Source`,
       '2 AI Apply generations / day',
       'Basic match intelligence',
       '2 Saved search alerts',
@@ -324,15 +377,26 @@ export const SUBSCRIPTION_PLANS = {
   PLUS: {
     id: 'plus',
     name: 'Plus',
-    badge: 'Best Value',
+    badge: '⭐ Most Popular',
     tagline: 'For active freelance job hunters',
     prices: {
-      INR: 299,
-      USD: 4.99,
+      monthly: {
+        INR: 499,
+        USD: 7,
+      },
+      annual: {
+        INR: 4990,
+        USD: 70,
+      },
+      INR: 499,
+      USD: 7,
     },
     limits: {
-      applicationsPerDay: 20,
-      sources: 5,
+      applicationsPerWindow: PLUS_APPLICATION_QUOTA,
+      applicationsPerDay: PLUS_APPLICATION_QUOTA,
+      quotaWindowHours: APPLICATION_QUOTA_WINDOW_HOURS,
+      sources: PLUS_CUSTOM_SOURCE_LIMIT,
+      customSources: PLUS_CUSTOM_SOURCE_LIMIT,
       aiApplyPerDay: 10,
       savedSearches: 10,
       themePresets: 6,
@@ -345,8 +409,8 @@ export const SUBSCRIPTION_PLANS = {
       followUps: true,
     },
     features: [
-      '20 Applications per day',
-      '5 Active Job Sources',
+      `${PLUS_APPLICATION_QUOTA} Applications per ${APPLICATION_QUOTA_WINDOW_HOURS}-hour window`,
+      `${PLUS_CUSTOM_SOURCE_LIMIT} Custom Job Sources`,
       '10 AI Apply generations / day',
       'Advanced match scoring',
       '10 Saved search alerts',
@@ -359,15 +423,26 @@ export const SUBSCRIPTION_PLANS = {
   PRO: {
     id: 'pro',
     name: 'Pro',
-    badge: 'Most Powerful',
+    badge: '🚀 Autopilot',
     tagline: 'Autonomous career pipeline & VIP perks',
     prices: {
-      INR: 899,
-      USD: 9.99,
+      monthly: {
+        INR: 1499,
+        USD: 19,
+      },
+      annual: {
+        INR: 14990,
+        USD: 190,
+      },
+      INR: 1499,
+      USD: 19,
     },
     limits: {
-      applicationsPerDay: 100,
-      sources: 999, // Unlimited
+      applicationsPerWindow: PRO_APPLICATION_QUOTA,
+      applicationsPerDay: PRO_APPLICATION_QUOTA,
+      quotaWindowHours: APPLICATION_QUOTA_WINDOW_HOURS,
+      sources: PRO_CUSTOM_SOURCE_LIMIT,
+      customSources: PRO_CUSTOM_SOURCE_LIMIT,
       aiApplyPerDay: 50,
       savedSearches: 999, // Unlimited
       themePresets: 6,
@@ -380,8 +455,8 @@ export const SUBSCRIPTION_PLANS = {
       followUps: true,
     },
     features: [
-      '100 Applications per day',
-      'Unlimited Job Sources',
+      `${PRO_APPLICATION_QUOTA} Applications per ${APPLICATION_QUOTA_WINDOW_HOURS}-hour window`,
+      `${PRO_CUSTOM_SOURCE_LIMIT} Custom Job Sources`,
       '50 AI Apply generations / day',
       'Priority + Top-Tier Match Score',
       'Unlimited Saved search alerts',

@@ -8,6 +8,7 @@
 
 import { normalizeWhatsAppNumber } from '../../utils/validators.js';
 import { getAuth } from '../../data/storage.js';
+import { getApiUrl } from '../../config/apiConfig.js';
 
 let cachedWhatsAppStatus = false;
 
@@ -17,7 +18,7 @@ export class WhatsAppOutreachAdapter {
    */
   async checkConfiguration() {
     try {
-      const res = await fetch('/api/outreach/status');
+      const res = await fetch(getApiUrl('/outreach/status'));
       if (res.ok) {
         const data = await res.json();
         cachedWhatsAppStatus = !!data.whatsAppConfigured;
@@ -76,7 +77,7 @@ export class WhatsAppOutreachAdapter {
     if (auth.phone || auth.userId) headers['x-user-id'] = auth.phone || auth.userId;
 
     try {
-      const res = await fetch('/api/outreach/whatsapp', {
+      const res = await fetch(getApiUrl('/outreach/whatsapp'), {
         method: 'POST',
         headers,
         body: JSON.stringify({

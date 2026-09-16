@@ -212,7 +212,7 @@ const Welcome = () => {
                 variant="primary"
                 size="lg"
                 fullWidth
-                onClick={() => setShowLoginForm(true)}
+                onClick={() => navigate('/login')}
                 icon={<ArrowRight size={18} />}
               >
                 Get Started
@@ -351,19 +351,10 @@ const Welcome = () => {
                 />
               </div>
 
-              {/* Digits counter info */}
+              {/* Country info */}
               <div className="flex justify-between items-center px-1 text-[11px] text-text-muted">
                 <span className="truncate max-w-[200px]">
                   Country: <strong className="text-text-primary font-medium">{selectedCountry.name} ({countryCode})</strong>
-                </span>
-                <span
-                  className={
-                    isPhoneValid
-                      ? 'text-emerald-500 font-bold'
-                      : 'text-text-muted font-medium'
-                  }
-                >
-                  {phoneNumber.length}/10 digits
                 </span>
               </div>
 
@@ -393,7 +384,7 @@ const Welcome = () => {
       {isDemo && (
         <motion.div variants={itemVariants} className="text-center pt-4">
           <p className="text-[11px] text-text-muted">
-            Demo Testing Mode — Any valid phone number • OTP: <span className="text-primary font-mono font-bold">{DEMO_OTP || '123456'}</span>
+            Demo Testing Mode — Any valid phone number • OTP: <span className="text-primary font-mono font-bold">{DEMO_OTP || '1234'}</span>
           </p>
         </motion.div>
       )}
