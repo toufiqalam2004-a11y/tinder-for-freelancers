@@ -214,18 +214,18 @@ const Applications = () => {
 
   return (
     <PageTransition>
-      <div className="px-5 py-6 pb-28 max-w-md mx-auto min-h-screen flex flex-col">
+      <div className="w-full max-w-md mx-auto px-4 sm:px-5 py-6 pb-28 min-h-screen flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-bold text-text-primary">Applications</h1>
             <p className="text-text-secondary text-xs mt-0.5">Track your pipeline, funnel & performance</p>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-shrink-0">
             <button
               onClick={() => navigate('/jobs')}
-              className="text-xs px-3 py-1.5 rounded-xl border border-primary/30 bg-primary/10 text-primary font-semibold hover:bg-primary/20 transition-colors"
+              className="text-xs px-3 py-1.5 rounded-xl border border-primary/30 bg-primary/10 text-primary font-semibold hover:bg-primary/20 transition-colors whitespace-nowrap"
             >
               + Find Jobs
             </button>
@@ -255,17 +255,17 @@ const Applications = () => {
             const availableTotal = quotaStatus?.availableApplications !== undefined ? quotaStatus.availableApplications : (remainingQuota + bonusTokens);
 
             return (
-              <Card className="mt-4 p-3.5 bg-surface border border-border shadow-xs space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center font-bold">
+              <Card className="mt-4 p-3.5 bg-surface border border-border shadow-xs space-y-2.5 w-full">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <div className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center font-bold flex-shrink-0">
                       <Crown size={15} />
                     </div>
-                    <div>
-                      <span className="text-xs font-bold text-text-primary">
+                    <div className="min-w-0 flex-1">
+                      <span className="text-xs font-bold text-text-primary block truncate">
                         {plan?.name || 'Free'} Plan Quota
                       </span>
-                      <span className="text-[10px] text-text-muted block">
+                      <span className="text-[10px] text-text-muted block truncate">
                         Applications: <strong className="text-text-primary font-bold">{used} / {limit}</strong> • Refreshes in: <strong className="text-primary">{refillFormatted}</strong>
                       </span>
                     </div>
@@ -274,7 +274,7 @@ const Applications = () => {
                   <button
                     type="button"
                     onClick={() => navigate('/membership')}
-                    className="text-xs font-bold text-primary hover:underline flex items-center gap-0.5"
+                    className="text-xs font-bold text-primary hover:underline flex items-center gap-0.5 flex-shrink-0 whitespace-nowrap"
                   >
                     <span>{isExhausted ? 'Upgrade / Top-Up' : 'Manage'}</span>
                     <ChevronRight size={13} />
@@ -290,17 +290,17 @@ const Applications = () => {
                 </div>
 
                 {isExhausted && (
-                  <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 dark:text-amber-400 flex items-center justify-between font-medium">
-                    <span className="font-bold">Application quota exhausted</span>
-                    <span>Next refill in {refillFormatted}</span>
+                  <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 dark:text-amber-400 flex items-center justify-between font-medium gap-2">
+                    <span className="font-bold whitespace-nowrap">Quota exhausted</span>
+                    <span className="whitespace-nowrap">Refill in {refillFormatted}</span>
                   </div>
                 )}
 
-                <div className="flex items-center justify-between text-[11px] text-text-muted pt-0.5">
-                  <span>
+                <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] text-text-muted pt-0.5">
+                  <span className="whitespace-nowrap">
                     Remaining quota: <strong className="text-primary font-bold">{remainingQuota}</strong>
                   </span>
-                  <span>
+                  <span className="whitespace-nowrap">
                     {bonusTokens > 0 ? (
                       <span className="text-amber-500 font-bold">Bonus Tokens: +{bonusTokens}</span>
                     ) : (
@@ -378,7 +378,7 @@ const Applications = () => {
                 return (
                   <Card
                     key={app.id}
-                    className="p-4 hover:border-primary/40 transition-colors cursor-pointer relative group"
+                    className="p-3.5 sm:p-4 hover:border-primary/40 transition-colors cursor-pointer relative group w-full"
                     onClick={() => navigate(`/application/${app.id}`)}
                   >
                     <div className="flex items-start justify-between gap-2">
@@ -386,11 +386,13 @@ const Applications = () => {
                         <h3 className="text-sm font-bold text-text-primary leading-snug truncate">
                           {app.title || app.jobTitle || 'Untitled Opportunity'}
                         </h3>
-                        <div className="flex items-center gap-1.5 text-xs text-text-secondary mt-1">
-                          <Building2 size={13} className="text-text-muted flex-shrink-0" />
-                          <span className="truncate">{app.company || 'Direct Client'}</span>
-                          <span className="text-text-muted">•</span>
-                          <span className="capitalize text-primary">{(app.platform || 'manual').replace('_', ' ')}</span>
+                        <div className="flex items-center gap-1.5 text-xs text-text-secondary mt-1 flex-wrap">
+                          <div className="flex items-center gap-1 min-w-0 max-w-[140px] truncate">
+                            <Building2 size={13} className="text-text-muted flex-shrink-0" />
+                            <span className="truncate">{app.company || 'Direct Client'}</span>
+                          </div>
+                          <span className="text-text-muted flex-shrink-0">•</span>
+                          <span className="capitalize text-primary flex-shrink-0">{(app.platform || 'manual').replace('_', ' ')}</span>
                         </div>
                       </div>
 
@@ -400,11 +402,11 @@ const Applications = () => {
                           e.stopPropagation();
                           setSelectedAppForStatus(app);
                         }}
-                        className="flex items-center gap-1 p-1 -mr-1 rounded-lg hover:bg-surface-hover transition-colors"
+                        className="flex items-center gap-1 p-1 -mr-1 rounded-lg hover:bg-surface-hover transition-colors flex-shrink-0"
                         title="Update status"
                       >
                         <span
-                          className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${statusMeta.color || ''} ${statusMeta.bg || ''} ${statusMeta.border || 'border-border'}`}
+                          className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border whitespace-nowrap ${statusMeta.color || ''} ${statusMeta.bg || ''} ${statusMeta.border || 'border-border'}`}
                         >
                           {statusMeta.label}
                         </span>
@@ -414,25 +416,25 @@ const Applications = () => {
 
                     {/* Message Snippet */}
                     {app.message && (
-                      <p className="text-[11px] text-text-secondary line-clamp-2 mt-2.5 bg-surface-hover p-2.5 rounded-lg border border-border/60 italic font-sans">
+                      <p className="text-[11px] text-text-secondary line-clamp-2 mt-2.5 bg-surface-hover p-2.5 rounded-lg border border-border/60 italic font-sans break-words">
                         "{app.message}"
                       </p>
                     )}
 
-                    <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-border text-[11px] text-text-muted">
-                      <span className="flex items-center gap-1">
-                        <Calendar size={12} />
-                        {formatAppliedDate(app.appliedAt, app.status)}
+                    <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-border text-[11px] text-text-muted gap-2">
+                      <span className="flex items-center gap-1 min-w-0 truncate">
+                        <Calendar size={12} className="flex-shrink-0" />
+                        <span className="truncate">{formatAppliedDate(app.appliedAt, app.status)}</span>
                       </span>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-shrink-0">
                         {app.matchScore && (
-                          <span className="flex items-center gap-1 text-primary font-semibold">
+                          <span className="flex items-center gap-1 text-primary font-semibold whitespace-nowrap">
                             <Sparkles size={11} />
                             {app.matchScore}% Match
                           </span>
                         )}
-                        <ChevronRight size={14} className="text-text-muted group-hover:text-primary transition-colors" />
+                        <ChevronRight size={14} className="text-text-muted group-hover:text-primary transition-colors flex-shrink-0" />
                       </div>
                     </div>
                   </Card>
