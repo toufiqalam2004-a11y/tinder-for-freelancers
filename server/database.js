@@ -129,27 +129,45 @@ class PostgresCollectionAdapter extends JsonDatabase {
     this.hasSynced = false;
   }
 
-  async syncFromPostgres() {
-    if (!this.pool || this.hasSynced) return;
+  load() {
+    if (this.hasSynced && Array.isArray(this.data) && this.data.length > 0 && !fs.existsSync(this.filePath)) {
+      return;
+    }
+    super.load();
+  }
+
+  async syncFromPostgres(force = false) {
+    if (!this.pool || (this.hasSynced && !force)) return;
     try {
       const res = await this.pool.query(`SELECT * FROM ${this.tableName}`);
-      if (res && Array.isArray(res.rows) && res.rows.length > 0) {
-        this.data = res.rows.map((r) => {
-          // Normalize column names from snake_case to camelCase
-          const obj = {};
-          for (const [k, v] of Object.entries(r)) {
-            const camel = k.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
-            obj[camel] = v;
-            obj[k] = v; // support both
-          }
-          return obj;
-        });
-        this.save();
+      if (res && Array.isArray(res.rows)) {
+        if (res.rows.length > 0) {
+          this.data = res.rows.map((r) => {
+            // Normalize column names from snake_case to camelCase
+            const obj = {};
+            for (const [k, v] of Object.entries(r)) {
+              const camel = k.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+              const val = v instanceof Date ? v.toISOString() : v;
+              obj[camel] = val;
+              obj[k] = val; // support both
+            }
+            return obj;
+          });
+          this.save();
+        } else {
+          this.data = [];
+          this.save();
+        }
       }
       this.hasSynced = true;
     } catch (err) {
-      // Table might not exist yet or connection initializing
-      this.hasSynced = true;
+      if (err.code === '42P01') {
+        // Table does not exist in PostgreSQL schema (non-fatal for optional/transient collections)
+        this.hasSynced = true;
+        return;
+      }
+      // Re-throw fatal connection or database query errors
+      throw err;
     }
   }
 
@@ -185,31 +203,54 @@ class PostgresCollectionAdapter extends JsonDatabase {
   async persistToPostgres(record) {
     if (!this.pool) return;
     try {
-      const keys = Object.keys(record).filter(
-        (k) => typeof record[k] !== 'function' && k !== '_id'
-      );
-      if (keys.length === 0) return;
-
-      const snakeKeys = keys.map((k) => k.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`));
-      const values = keys.map((k) => {
-        const val = record[k];
-        if (typeof val === 'object' && val !== null && !(val instanceof Date)) {
-          return JSON.stringify(val);
-        }
-        return val;
-      });
-
-      const cols = snakeKeys.join(', ');
-      const placeholders = values.map((_, i) => `$${i + 1}`).join(', ');
-      const updates = snakeKeys.map((c, i) => `${c} = EXCLUDED.${c}`).join(', ');
-
       const conflictCol = this.tableName === 'sessions' ? 'token' : (this.tableName === 'otp_verifications' ? 'phone' : 'id');
 
-      const sql = `INSERT INTO ${this.tableName} (${cols}) VALUES (${placeholders})
-                   ON CONFLICT (${conflictCol}) DO UPDATE SET ${updates}`;
+      const entryMap = new Map();
+      for (const k of Object.keys(record)) {
+        if (typeof record[k] === 'function' || k === '_id') continue;
+        if (k === 'id' && (this.tableName === 'sessions' || this.tableName === 'otp_verifications')) continue;
+
+        const snakeKey = k.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+        if (!entryMap.has(snakeKey) || k === snakeKey) {
+          let val = record[k];
+          if (typeof val === 'object' && val !== null && !(val instanceof Date)) {
+            val = JSON.stringify(val);
+          }
+          entryMap.set(snakeKey, val);
+        }
+      }
+
+      const snakeKeys = Array.from(entryMap.keys());
+      if (snakeKeys.length === 0) return;
+
+      if (this.tableName === 'sessions') {
+        if (!entryMap.has('country_code')) {
+          entryMap.set('country_code', '+91');
+          snakeKeys.push('country_code');
+        }
+        if (!entryMap.has('local_number') || !entryMap.get('local_number')) {
+          const ph = String(entryMap.get('phone') || '');
+          entryMap.set('local_number', ph.slice(-10) || '0000000000');
+          if (!snakeKeys.includes('local_number')) snakeKeys.push('local_number');
+        }
+      }
+
+      const values = Array.from(entryMap.values());
+      const cols = snakeKeys.join(', ');
+      const placeholders = values.map((_, i) => `$${i + 1}`).join(', ');
+
+      const updateCols = snakeKeys.filter((c) => c !== conflictCol);
+      const onConflictClause = updateCols.length > 0
+        ? `ON CONFLICT (${conflictCol}) DO UPDATE SET ${updateCols.map((c) => `${c} = EXCLUDED.${c}`).join(', ')}`
+        : `ON CONFLICT (${conflictCol}) DO NOTHING`;
+
+      const sql = `INSERT INTO ${this.tableName} (${cols}) VALUES (${placeholders}) ${onConflictClause}`;
       await this.pool.query(sql, values);
     } catch (e) {
-      // Non-fatal: logged for diagnostics
+      // Diagnostic logging for PostgreSQL persistence issues
+      if (process.env.DEBUG || process.env.NODE_ENV !== 'production') {
+        console.warn(`[PostgresCollectionAdapter] Persist notice (${this.tableName}):`, e.message);
+      }
     }
   }
 }
@@ -277,6 +318,36 @@ export const db = {
   paymentOrders: createCollection('payment_orders', 'payment_orders.json'),
   paymentTransactions: createCollection('payment_transactions', 'payment_transactions.json'),
   paymentWebhooks: createCollection('payment_webhooks', 'payment_webhooks.json'),
+
+  // Hydrate all collections from PostgreSQL
+  async syncAll(options = {}) {
+    if (!IS_POSTGRES || !globalPool) {
+      return { synced: false, engine: this.engine, count: 0 };
+    }
+
+    const client = await globalPool.connect();
+    try {
+      await client.query('SELECT 1');
+    } finally {
+      client.release();
+    }
+
+    const collections = Object.entries(this).filter(
+      ([k, v]) => v && typeof v.syncFromPostgres === 'function'
+    );
+
+    let syncedCount = 0;
+    for (const [name, col] of collections) {
+      await col.syncFromPostgres(Boolean(options.force));
+      syncedCount++;
+    }
+
+    return {
+      synced: true,
+      engine: this.engine,
+      count: syncedCount,
+    };
+  },
 
   // Direct SQL and Transaction support when connected to Postgres
   async query(sql, params = []) {

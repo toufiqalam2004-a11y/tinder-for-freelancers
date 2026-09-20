@@ -18,8 +18,11 @@ class PersistentSessionStore {
     this.hasHydrated = false;
   }
 
-  hydrate() {
-    if (this.hasHydrated) return;
+  hydrate(force = false) {
+    if (this.hasHydrated && !force) return;
+    if (force) {
+      this.memoryCache.clear();
+    }
     try {
       const allSessions = db.sessions.findAll();
       const now = Date.now();

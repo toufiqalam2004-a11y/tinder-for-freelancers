@@ -791,17 +791,47 @@ app.use((err, req, res, next) => {
   });
 });
 
-const server = app.listen(PORT, HOST, () => {
-  console.log(`[TF Backend Server] running securely on http://${HOST}:${PORT}`);
+let server = null;
 
-  // Safe server-side application auto-delete sweep for users with setting enabled
-  try {
-    const activePrefs = db.preferences.findAll((p) => p.autoDeleteApplicationsAfter7Days);
-    activePrefs.forEach((p) => performServerAutoDelete(p.userId));
-  } catch (e) {
-    // Ignore initial empty db sweep
+export async function startServer() {
+  const engine = (process.env.DATABASE_ENGINE || '').toLowerCase();
+  if (engine === 'supabase' || db.isPostgres) {
+    console.log('[Database Engine] Initializing Supabase PostgreSQL connection & hydration...');
+    try {
+      const pool = db.getPool();
+      if (!pool) {
+        throw new Error('PostgreSQL connection pool could not be initialized. Check DATABASE_URL.');
+      }
+      const result = await db.syncAll();
+      console.log(`[Database Engine] ✓ Successfully hydrated ${result.count} collections from Supabase PostgreSQL.`);
+      if (typeof activeSessions.hydrate === 'function') {
+        activeSessions.hydrate(true);
+      }
+    } catch (err) {
+      console.error('[FATAL DATABASE ERROR] Failed to connect or hydrate from Supabase PostgreSQL:', err.message);
+      if (IS_PROD || engine === 'supabase') {
+        console.error('[FATAL DATABASE ERROR] In production with DATABASE_ENGINE=supabase, server startup cannot proceed in an empty fallback state. Aborting.');
+        process.exit(1);
+      }
+    }
   }
-});
+
+  server = app.listen(PORT, HOST, () => {
+    console.log(`[TF Backend Server] running securely on http://${HOST}:${PORT}`);
+
+    // Safe server-side application auto-delete sweep for users with setting enabled
+    try {
+      const activePrefs = db.preferences.findAll((p) => p.autoDeleteApplicationsAfter7Days);
+      activePrefs.forEach((p) => performServerAutoDelete(p.userId));
+    } catch (e) {
+      // Ignore initial empty db sweep
+    }
+  });
+
+  return server;
+}
+
+startServer();
 
 // Periodic server-side application cleanup (runs every 6 hours)
 const cleanupInterval = setInterval(() => {
@@ -818,27 +848,31 @@ cleanupInterval.unref();
 function handleShutdown(signal) {
   console.log(`\n[TF Backend Server] Received ${signal}. Starting graceful shutdown...`);
   
-  // Stop accepting new connections
-  server.close(() => {
-    console.log('[TF Backend Server] Closed HTTP server connections.');
-    try {
-      // Flush any pending database writes to disk
-      if (typeof db.flushAll === 'function') {
-        db.flushAll();
-        console.log('[TF Backend Server] Flushed database state safely.');
+  if (server) {
+    // Stop accepting new connections
+    server.close(() => {
+      console.log('[TF Backend Server] Closed HTTP server connections.');
+      try {
+        // Flush any pending database writes to disk
+        if (typeof db.flushAll === 'function') {
+          db.flushAll();
+          console.log('[TF Backend Server] Flushed database state safely.');
+        }
+      } catch (e) {
+        console.error('[TF Backend Server] Error flushing database during shutdown:', e);
       }
-    } catch (e) {
-      console.error('[TF Backend Server] Error flushing database during shutdown:', e);
-    }
-    console.log('[TF Backend Server] Shutdown complete. Exiting cleanly.');
-    process.exit(0);
-  });
+      console.log('[TF Backend Server] Shutdown complete. Exiting cleanly.');
+      process.exit(0);
+    });
 
-  // Force close if graceful shutdown hangs
-  setTimeout(() => {
-    console.error('[TF Backend Server] Forcefully shutting down after timeout.');
-    process.exit(1);
-  }, 5000);
+    // Force close if graceful shutdown hangs
+    setTimeout(() => {
+      console.error('[TF Backend Server] Forcefully shutting down after timeout.');
+      process.exit(1);
+    }, 5000);
+  } else {
+    process.exit(0);
+  }
 }
 
 process.on('SIGINT', () => handleShutdown('SIGINT'));
