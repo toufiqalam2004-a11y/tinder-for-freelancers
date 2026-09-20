@@ -294,8 +294,70 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// 6. Hardened Phone OTP Authentication
-const otpStore = new Map(); // phone -> { code, countryCode, localNumber, expiresAt, attempts, resendAvailableAt }
+// 6. Hardened Phone OTP Authentication with Persistence (Survives Restarts)
+class PersistentOtpStore {
+  constructor() {
+    this.memoryCache = new Map();
+  }
+
+  get(phone) {
+    if (!phone) return undefined;
+    let rec = this.memoryCache.get(phone);
+    if (!rec && db.otpVerifications) {
+      const persisted = db.otpVerifications.findById(phone) || db.otpVerifications.findOne((o) => o.phone === phone);
+      if (persisted) {
+        rec = {
+          code: String(persisted.code),
+          countryCode: persisted.countryCode || persisted.country_code || '+91',
+          localNumber: persisted.localNumber || persisted.local_number || '',
+          createdAt: persisted.createdAt ? new Date(persisted.createdAt).getTime() : Date.now(),
+          expiresAt: persisted.expiresAt ? new Date(persisted.expiresAt).getTime() : Date.now() + 10 * 60 * 1000,
+          attempts: persisted.attempts || 0,
+          isDemo: Boolean(persisted.isDemo || persisted.is_demo),
+        };
+        this.memoryCache.set(phone, rec);
+      }
+    }
+    return rec;
+  }
+
+  set(phone, record) {
+    if (!phone) return this;
+    this.memoryCache.set(phone, record);
+    if (db.otpVerifications) {
+      db.otpVerifications.insert({
+        id: phone,
+        phone,
+        code: String(record.code),
+        countryCode: record.countryCode || '+91',
+        country_code: record.countryCode || '+91',
+        localNumber: record.localNumber || '',
+        local_number: record.localNumber || '',
+        attempts: record.attempts || 0,
+        isDemo: Boolean(record.isDemo),
+        is_demo: Boolean(record.isDemo),
+        expiresAt: new Date(record.expiresAt || Date.now() + 10 * 60 * 1000).toISOString(),
+        expires_at: new Date(record.expiresAt || Date.now() + 10 * 60 * 1000).toISOString(),
+        createdAt: new Date(record.createdAt || Date.now()).toISOString(),
+        created_at: new Date(record.createdAt || Date.now()).toISOString(),
+      });
+    }
+    return this;
+  }
+
+  delete(phone) {
+    if (!phone) return false;
+    this.memoryCache.delete(phone);
+    if (db.otpVerifications) {
+      try {
+        db.otpVerifications.delete(phone);
+      } catch {}
+    }
+    return true;
+  }
+}
+
+const otpStore = new PersistentOtpStore();
 
 /**
  * Strict Phone Number Validator for OTP endpoints

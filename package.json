@@ -12,11 +12,13 @@
     "test": "node tests/cleanFixtures.js && node tests/quickApplyAndOutreach.test.js && node tests/rewardsAndReferrals.test.js && node tests/maxQuotaAndStreak.test.js && node tests/applicationComposerGating.test.js && node tests/swipeApplyGating.test.js && node tests/applicationsPage.test.js && node tests/newUserAndFeed.test.js && node tests/autopilotAccessGating.test.js && node tests/sourceManagementGating.test.js && node tests/jobLifecycleSync.test.js && node --test tests/adminRealUserDataSync.test.js && node --test tests/adminSecurityAndEndpoints.test.js && node --test tests/adminUserAppSourceSync.test.js && node --test tests/adminTopUpMonitoring.test.js && node --test tests/apkDownloadFlow.test.js && node tests/mainAppFinalPolish.test.js && node --test tests/threeWebsiteArchitecture.test.js && node tests/subscriptionLifecycleAndIsolation.test.js && node --test tests/nameNumberingAndPhoneUi.test.js && node --test tests/adminResetAppData.test.js && node --test tests/uniqueUsernameAndMandatoryEmail.test.js && node tests/cleanFixtures.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "framer-motion": "^10.16.0",
     "lucide-react": "^0.294.0",
+    "pg": "^8.23.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-hot-toast": "^2.4.1",

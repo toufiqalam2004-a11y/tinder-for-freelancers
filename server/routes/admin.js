@@ -917,6 +917,38 @@ function getTopUpData() {
     });
   }
 
+  // 3. Extract from db.paymentTransactions (V1 Supabase & PostgreSQL Payments)
+  if (db.paymentTransactions) {
+    const allPaymentTx = db.paymentTransactions.findAll();
+    allPaymentTx.forEach((ptx) => {
+      if (!ptx || !ptx.id || seenTxIds.has(ptx.id)) return;
+      seenTxIds.add(ptx.id);
+      const user = userMap.get(ptx.userId) || (ptx.phone && allUsers.find((u) => u.phone === ptx.phone));
+      const profile = profileMap.get(ptx.userId) || (user?.phone && profileMap.get(user.phone));
+      const candidateName = profile?.name || user?.name || user?.phone || 'Candidate';
+      const candidatePhone = user?.phone || ptx.phone || '—';
+      const amt = Number(ptx.amountMajor !== undefined ? ptx.amountMajor : (ptx.amount || 0));
+      const curr = ptx.currency || 'INR';
+      const isSuccess = ptx.status === 'success' || ptx.status === 'completed' || ptx.status === 'captured';
+      topUpTransactions.push({
+        id: ptx.id,
+        userId: ptx.userId,
+        userName: candidateName,
+        userPhone: candidatePhone,
+        amount: amt,
+        formattedAmount: curr === 'INR' ? `₹${amt}` : `$${amt}`,
+        currency: curr,
+        creditsAdded: Number(ptx.creditsAdded || 0),
+        status: isSuccess ? 'Successful' : (ptx.status || 'Pending'),
+        paymentNature: ptx.isDemo === false ? 'Real / Live' : (ptx.provider === 'razorpay' ? 'Real / Live' : 'Demo / Test'),
+        date: ptx.createdAt || ptx.date,
+        transactionId: ptx.providerPaymentId || ptx.transactionId || ptx.id,
+        plan: ptx.planId || 'subscription',
+        billingCycle: ptx.billingCycle,
+      });
+    });
+  }
+
   // Sort newest first
   topUpTransactions.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
