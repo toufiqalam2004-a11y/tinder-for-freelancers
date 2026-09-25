@@ -71,7 +71,12 @@ const OTPVerification = () => {
           setIsVerifyingState(false);
           // Brief success hold before continuing login flow
           setTimeout(() => {
-            navigate('/profile-setup');
+            const isNew = result.user?.isNewUser ?? result.isNewUser;
+            if (isNew) {
+              navigate('/profile-setup');
+            } else {
+              navigate('/jobs');
+            }
           }, 800);
         } else {
           setIsVerifyingState(false);
@@ -413,18 +418,6 @@ const OTPVerification = () => {
             </p>
           )}
         </div>
-
-        {/* Demo Mode Hint */}
-        {isDemo && DEMO_OTP && (
-          <div className="mt-6 bg-surface border border-border rounded-2xl px-4 py-3 w-full">
-            <p className="text-xs text-text-muted text-center">
-              Demo Mode — Enter OTP{' '}
-              <span className="text-primary-light font-mono font-semibold tracking-widest">
-                {DEMO_OTP}
-              </span>
-            </p>
-          </div>
-        )}
       </div>
     </motion.div>
   );

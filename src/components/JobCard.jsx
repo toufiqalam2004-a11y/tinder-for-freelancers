@@ -20,7 +20,6 @@ import {
   FilePlus2,
   Briefcase,
   Mail,
-  Phone,
 } from 'lucide-react';
 import Card from './Card';
 import Button from './Button';

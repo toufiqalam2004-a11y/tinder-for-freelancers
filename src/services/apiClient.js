@@ -9,6 +9,18 @@ import { getApiBaseUrl } from '../config/apiConfig.js';
 // Dynamically configurable production/development API base
 const API_BASE = getApiBaseUrl();
 
+async function requestJson(path, options = {}) {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      headers: { 'Content-Type': 'application/json', ...options.headers },
+      ...options,
+    });
+    return await res.json();
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
 export const apiClient = {
   /**
    * Health Check
@@ -35,7 +47,35 @@ export const apiClient = {
   },
 
   /**
-   * Request OTP
+   * Check if phone account exists
+   */
+  async checkPhone(phone, details = {}) {
+    try {
+      const res = await fetch(`${API_BASE}/auth/check-phone`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone,
+          countryCode: details.countryCode,
+          localNumber: details.localNumber,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: data.error || 'Failed to check phone number.',
+          exists: false,
+        };
+      }
+      return data;
+    } catch (err) {
+      return { success: false, error: 'Network error checking phone', exists: false };
+    }
+  },
+
+  /**
+   * Request OTP with CAPTCHA and Mode Validation
    */
   async sendOtp(phone, details = {}) {
     try {
@@ -46,25 +86,29 @@ export const apiClient = {
           phone,
           countryCode: details.countryCode,
           localNumber: details.localNumber,
+          mode: details.mode,
+          captchaToken: details.captchaToken,
+          deviceId: details.deviceId,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         return {
           success: false,
-          error: data.error || `HTTP ${res.status}: Failed to send OTP`,
+          code: data.code,
+          error: data.error || (res.status === 429 ? 'Too many OTP requests. Please wait a moment.' : 'Unable to send OTP. Please try again.'),
           remainingSeconds: data.remainingSeconds,
           status: res.status,
         };
       }
       return data;
     } catch (err) {
-      return { success: false, error: err.message || 'Network error sending OTP' };
+      return { success: false, error: 'Unable to send OTP. Please try again.' };
     }
   },
 
   /**
-   * Verify OTP
+   * Verify OTP with Device Binding
    */
   async verifyOtp(phone, code, details = {}) {
     try {
@@ -74,23 +118,27 @@ export const apiClient = {
         body: JSON.stringify({
           phone,
           code,
+          otp: code,
           countryCode: details.countryCode,
           localNumber: details.localNumber,
           referralCode: details.referralCode,
+          deviceId: details.deviceId,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         return {
           success: false,
-          error: data.error || `HTTP ${res.status}: Failed to verify OTP`,
+          code: data.code,
+          error: data.error || (res.status === 429 ? 'Too many attempts. Please wait.' : 'Unable to verify OTP. Please try again.'),
           remainingAttempts: data.remainingAttempts,
+          remainingCooldownHours: data.remainingCooldownHours,
           status: res.status,
         };
       }
       return data;
     } catch (err) {
-      return { success: false, error: err.message || 'Network error verifying OTP' };
+      return { success: false, error: 'Unable to verify OTP. Please try again.' };
     }
   },
 
@@ -196,102 +244,51 @@ export const apiClient = {
   /**
    * Safe Data Migration: Sync local data into backend database
    */
-  async migrateData(payload) {
-    try {
-      const res = await fetch(`${API_BASE}/data/migrate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      return await res.json();
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
+  migrateData(payload) {
+    return requestJson('/data/migrate', { method: 'POST', body: JSON.stringify(payload) });
   },
 
   /**
    * Fetch user reward status & credits
    */
-  async getRewardsStatus(date) {
-    try {
-      const q = date ? `?date=${encodeURIComponent(date)}` : '';
-      const res = await fetch(`${API_BASE}/rewards/status${q}`);
-      return await res.json();
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
+  getRewardsStatus(date) {
+    const q = date ? `?date=${encodeURIComponent(date)}` : '';
+    return requestJson(`/rewards/status${q}`);
   },
 
   /**
    * Claim daily login reward (+1 application credit)
    */
-  async claimDailyLogin(date) {
-    try {
-      const res = await fetch(`${API_BASE}/rewards/daily-login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date }),
-      });
-      return await res.json();
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
+  claimDailyLogin(date) {
+    return requestJson('/rewards/daily-login', { method: 'POST', body: JSON.stringify({ date }) });
   },
 
   /**
    * Fetch referral status & unique code
    */
-  async getReferralsStatus() {
-    try {
-      const res = await fetch(`${API_BASE}/referrals/status`);
-      return await res.json();
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
+  getReferralsStatus() {
+    return requestJson('/referrals/status');
   },
 
   /**
    * Claim referral code (+5 credits for new user)
    */
-  async claimReferral(referralCode) {
-    try {
-      const res = await fetch(`${API_BASE}/referrals/claim`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ referralCode }),
-      });
-      return await res.json();
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
+  claimReferral(referralCode) {
+    return requestJson('/referrals/claim', { method: 'POST', body: JSON.stringify({ referralCode }) });
   },
 
   /**
    * Fetch rolling 8-hour quota status & balances
    */
-  async getQuotaStatus(userId = null) {
-    try {
-      const q = userId ? `?userId=${encodeURIComponent(userId)}` : '';
-      const res = await fetch(`${API_BASE}/quota/status${q}`);
-      return await res.json();
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
+  getQuotaStatus(userId = null) {
+    const q = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+    return requestJson(`/quota/status${q}`);
   },
 
   /**
    * Process & check Free 3-day consecutive login streak
    */
-  async checkLoginStreak(timezone = null) {
-    try {
-      const res = await fetch(`${API_BASE}/rewards/streak-check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ timezone }),
-      });
-      return await res.json();
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
+  checkLoginStreak(timezone = null) {
+    return requestJson('/rewards/streak-check', { method: 'POST', body: JSON.stringify({ timezone }) });
   },
 };

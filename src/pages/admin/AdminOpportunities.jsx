@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Briefcase, Search, ExternalLink, Sparkles, DollarSign, Tag, Clock } from 'lucide-react';
+import { Search, ExternalLink, Sparkles } from 'lucide-react';
 import { useAdmin } from './AdminContext';
 
 export default function AdminOpportunities() {

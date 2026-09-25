@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Sparkles, Shield, Heart, ExternalLink, Code2 } from 'lucide-react';
+import { X, Sparkles, Shield } from 'lucide-react';
 import Button from './Button';
 import { APP_CONFIG } from '../utils/constants';
 
@@ -82,8 +82,8 @@ const AboutModal = ({ isOpen, onClose }) => {
                   <div className="text-text-muted">9-stage conversion funnel</div>
                 </div>
                 <div className="p-2.5 rounded-lg border border-border bg-surface-hover/30">
-                  <div className="font-semibold text-text-primary">AI Autopilot</div>
-                  <div className="text-text-muted">Controlled career agent</div>
+                  <div className="font-semibold text-text-primary">AI Pitch Writer</div>
+                  <div className="text-text-muted">Tailored proposal drafts</div>
                 </div>
                 <div className="p-2.5 rounded-lg border border-border bg-surface-hover/30">
                   <div className="font-semibold text-text-primary">PWA Ready</div>

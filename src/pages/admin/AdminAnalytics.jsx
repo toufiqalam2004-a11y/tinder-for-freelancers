@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BarChart3, PieChart, Users, Send, Globe, TrendingUp } from 'lucide-react';
+import { Users, Send, Globe } from 'lucide-react';
 import { useAdmin } from './AdminContext';
 
 export default function AdminAnalytics() {

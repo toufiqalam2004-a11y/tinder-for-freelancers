@@ -12,6 +12,15 @@ export default function AdminSettings({ onResetSuccess }) {
   const [resetError, setResetError] = useState(null);
   const [resetSummary, setResetSummary] = useState(null);
 
+  // Delete All Users Danger Zone State
+  const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
+  const [confirmationText, setConfirmationText] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [isSecondConfirmStep, setIsSecondConfirmStep] = useState(false);
+  const [isDeletingUsers, setIsDeletingUsers] = useState(false);
+  const [deleteAllError, setDeleteAllError] = useState(null);
+  const [deleteSummary, setDeleteSummary] = useState(null);
+
   const fetchSettings = async () => {
     setLoading(true);
     try {
@@ -23,6 +32,46 @@ export default function AdminSettings({ onResetSuccess }) {
       console.error('Failed to load settings:', e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleExecuteDeleteAllUsers = async () => {
+    setIsDeletingUsers(true);
+    setDeleteAllError(null);
+    try {
+      const res = await apiFetch('/users/all', {
+        method: 'DELETE',
+        body: JSON.stringify({
+          confirmationPhrase: confirmationText,
+          adminPassword,
+        }),
+      });
+
+      if (res.success) {
+        const count = res.deletedUsers || 0;
+        toast.success(`All user accounts have been deleted. ${count} user accounts deleted.`);
+        setDeleteSummary(res);
+        setShowDeleteAllModal(false);
+        setConfirmationText('');
+        setAdminPassword('');
+        setIsSecondConfirmStep(false);
+        fetchSettings();
+        if (onResetSuccess) {
+          onResetSuccess();
+        }
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('tf_admin_reset_complete'));
+          window.dispatchEvent(new CustomEvent('tf_admin_users_deleted', { detail: { count } }));
+        }
+      } else {
+        setDeleteAllError(res.error || 'Failed to delete users.');
+        setAdminPassword('');
+      }
+    } catch (err) {
+      setDeleteAllError(err.message || 'An error occurred while deleting users.');
+      setAdminPassword('');
+    } finally {
+      setIsDeletingUsers(false);
     }
   };
 
@@ -179,8 +228,8 @@ export default function AdminSettings({ onResetSuccess }) {
         </div>
       </div>
 
-      {/* 4. Danger Zone - Reset App Data */}
-      <div className="bg-[#1C1A1A] border border-rose-900/40 rounded-2xl p-6 shadow-xl space-y-4">
+      {/* 4. Danger Zone */}
+      <div className="bg-[#1C1A1A] border border-rose-900/40 rounded-2xl p-6 shadow-xl space-y-6">
         <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
           <div className="flex items-center gap-2.5">
             <AlertTriangle size={18} className="text-rose-500" />
@@ -193,7 +242,46 @@ export default function AdminSettings({ onResetSuccess }) {
           </span>
         </div>
 
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-1">
+        {/* Action 1: Delete All Users (Permanent Complete User Account & Data Purge) */}
+        <div className="p-4 rounded-xl bg-rose-950/20 border border-rose-900/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1 max-w-xl">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <Trash2 size={15} className="text-rose-400" />
+              <span>Delete All Users</span>
+            </h3>
+            <p className="text-xs text-neutral-300 leading-relaxed">
+              Permanent action. This will delete all user accounts and their associated user data.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setDeleteAllError(null);
+              setConfirmationText('');
+              setAdminPassword('');
+              setIsSecondConfirmStep(false);
+              setShowDeleteAllModal(true);
+            }}
+            className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white text-xs font-bold transition-all shadow-lg shadow-rose-950/50 flex items-center gap-2 shrink-0 border border-rose-500/40 hover:scale-[1.02]"
+          >
+            <Trash2 size={14} />
+            <span>Delete All Users</span>
+          </button>
+        </div>
+
+        {deleteSummary && (
+          <div className="p-3.5 rounded-xl bg-rose-950/30 border border-rose-900/50 text-rose-300 text-xs space-y-1">
+            <p className="font-bold flex items-center gap-1.5 text-white">
+              <CheckCircle2 size={14} className="text-rose-400" /> All user accounts have been deleted.
+            </p>
+            <p className="text-neutral-300 text-[11px]">
+              {deleteSummary.deletedUsers} user account{deleteSummary.deletedUsers === 1 ? '' : 's'} deleted. Admin dashboard and built-in sources remain active.
+            </p>
+          </div>
+        )}
+
+        {/* Action 2: Reset App Data (Safe Test & Demo Fixtures Purge) */}
+        <div className="pt-2 border-t border-neutral-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="space-y-1 max-w-xl">
             <h3 className="text-sm font-semibold text-white">Reset App Data</h3>
             <p className="text-xs text-neutral-400 leading-relaxed">
@@ -203,9 +291,9 @@ export default function AdminSettings({ onResetSuccess }) {
           <button
             type="button"
             onClick={() => setShowResetModal(true)}
-            className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white text-xs font-bold transition-all shadow-lg shadow-rose-900/30 flex items-center gap-2 shrink-0 border border-rose-500/30 hover:scale-[1.02]"
+            className="px-4 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 active:bg-neutral-600 text-neutral-200 text-xs font-semibold transition-all flex items-center gap-2 shrink-0 border border-neutral-700"
           >
-            <Trash2 size={14} />
+            <RefreshCw size={14} />
             <span>Reset App Data</span>
           </button>
         </div>
@@ -313,6 +401,169 @@ export default function AdminSettings({ onResetSuccess }) {
                   </>
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete All Users Modal */}
+      {showDeleteAllModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-[#181616] border border-rose-900/60 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 text-[#FAF7F2]">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-500">
+                  <AlertTriangle size={24} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Delete all users?</h3>
+                  <p className="text-xs text-rose-400 font-medium mt-0.5">
+                    This action permanently deletes all user accounts and associated user data. This cannot be undone.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isDeletingUsers) {
+                    setShowDeleteAllModal(false);
+                    setAdminPassword('');
+                    setConfirmationText('');
+                    setIsSecondConfirmStep(false);
+                  }
+                }}
+                className="text-neutral-500 hover:text-white p-1 rounded-lg transition-colors"
+                disabled={isDeletingUsers}
+                aria-label="Close dialog"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Step 1: Confirmation phrase & Admin Password */}
+            {!isSecondConfirmStep ? (
+              <div className="space-y-4">
+                <div className="p-3.5 rounded-xl bg-rose-950/30 border border-rose-900/40 text-xs text-neutral-300 space-y-2">
+                  <p className="font-semibold text-rose-300">
+                    This will permanently delete:
+                  </p>
+                  <ul className="grid grid-cols-2 gap-1 text-[11px] text-neutral-400">
+                    <li>• All registered users</li>
+                    <li>• Candidate profiles</li>
+                    <li>• User applications</li>
+                    <li>• User subscriptions</li>
+                    <li>• User quotas & rewards</li>
+                    <li>• User sessions & devices</li>
+                  </ul>
+                  <p className="text-[11px] text-neutral-400 pt-1 border-t border-rose-900/30">
+                    Admin accounts, settings, and built-in platform sources will remain safe.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-neutral-300">
+                    To confirm, please type <span className="font-mono text-rose-400 font-bold select-all">DELETE ALL USERS</span>:
+                  </label>
+                  <input
+                    type="text"
+                    value={confirmationText}
+                    onChange={(e) => {
+                      setConfirmationText(e.target.value);
+                      if (deleteAllError) setDeleteAllError(null);
+                    }}
+                    placeholder="DELETE ALL USERS"
+                    disabled={isDeletingUsers}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-700 text-white placeholder:text-neutral-600 font-mono text-xs focus:outline-none focus:border-rose-500"
+                    autoFocus
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-neutral-300">
+                    Admin Password / Secret:
+                  </label>
+                  <input
+                    type="password"
+                    value={adminPassword}
+                    onChange={(e) => {
+                      setAdminPassword(e.target.value);
+                      if (deleteAllError) setDeleteAllError(null);
+                    }}
+                    placeholder="Enter admin password"
+                    disabled={isDeletingUsers}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-700 text-white placeholder:text-neutral-600 text-xs focus:outline-none focus:border-rose-500"
+                  />
+                </div>
+              </div>
+            ) : (
+              /* Step 2: Final Second Confirmation */
+              <div className="space-y-3 py-2">
+                <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-800 text-center space-y-2">
+                  <AlertTriangle size={28} className="text-rose-500 mx-auto" />
+                  <h4 className="text-base font-bold text-white">Are you absolutely sure?</h4>
+                  <p className="text-xs text-neutral-300 max-w-sm mx-auto leading-relaxed">
+                    This action is permanent and completely irreversible. All user accounts and their associated records will be purged immediately.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {deleteAllError && (
+              <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-800 text-rose-400 text-xs font-medium">
+                {deleteAllError}
+              </div>
+            )}
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-neutral-800/80">
+              <button
+                type="button"
+                onClick={() => {
+                  if (isSecondConfirmStep) {
+                    setIsSecondConfirmStep(false);
+                  } else {
+                    setShowDeleteAllModal(false);
+                    setAdminPassword('');
+                    setConfirmationText('');
+                  }
+                }}
+                disabled={isDeletingUsers}
+                className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold transition-colors disabled:opacity-50"
+              >
+                {isSecondConfirmStep ? 'Back' : 'Cancel'}
+              </button>
+
+              {!isSecondConfirmStep ? (
+                <button
+                  type="button"
+                  onClick={() => setIsSecondConfirmStep(true)}
+                  disabled={confirmationText !== 'DELETE ALL USERS' || !adminPassword.trim() || isDeletingUsers}
+                  className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white text-xs font-bold transition-all shadow-lg shadow-rose-950/50 flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Trash2 size={13} />
+                  <span>Delete All Users</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleExecuteDeleteAllUsers}
+                  disabled={isDeletingUsers}
+                  className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white text-xs font-bold transition-all shadow-lg shadow-rose-950/50 flex items-center gap-2 disabled:opacity-60"
+                >
+                  {isDeletingUsers ? (
+                    <>
+                      <RefreshCw size={13} className="animate-spin" />
+                      <span>Deleting users...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 size={13} />
+                      <span>Yes, Delete All Users Permanently</span>
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -1,6 +1,6 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Briefcase, Globe, FileText, User, Bot } from 'lucide-react';
+import { Briefcase, Globe, FileText, User } from 'lucide-react';
 
 const BottomNav = () => {
   const location = useLocation();
@@ -8,7 +8,6 @@ const BottomNav = () => {
 
   const tabs = [
     { path: '/jobs', label: 'Jobs', icon: Briefcase },
-    { path: '/autopilot', label: 'Autopilot', icon: Bot },
     { path: '/sources', label: 'Sources', icon: Globe },
     { path: '/applications', label: 'Applications', icon: FileText },
     { path: '/profile', label: 'Profile', icon: User },

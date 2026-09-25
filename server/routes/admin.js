@@ -1446,5 +1446,381 @@ export const handleResetAppData = (req, res) => {
 router.post('/reset-app-data', handleResetAppData);
 router.post('/reset-data', handleResetAppData);
 
+// Rate limit tracker for Delete All Users
+const deleteAllUsersRateLimit = {
+  lastExecutionTime: 0,
+  failedAttempts: [],
+};
+
+// =================================================================
+// 13. ADMIN DELETE ALL USERS (PERMANENT COMPLETE USER DATA PURGE)
+// =================================================================
+export const handleDeleteAllUsers = async (req, res) => {
+  // 1. Strict Administrator Authentication & Role Authorization
+  const adminKeyHeader = req.headers['x-admin-key'];
+  const isMasterKey = Boolean(adminKeyHeader && ADMIN_SECRET_KEY && adminKeyHeader === ADMIN_SECRET_KEY);
+
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+
+  if (!isMasterKey && !token) {
+    return res.status(401).json({
+      success: false,
+      error: 'Admin access required.',
+    });
+  }
+
+  let adminOperator = null;
+
+  if (isMasterKey) {
+    adminOperator = {
+      id: 'admin-master',
+      role: 'admin',
+      name: 'System Administrator (Master Key)',
+    };
+  } else if (token) {
+    const session = activeSessions.get(token);
+    if (!session || Date.now() > session.expiresAt) {
+      if (session) activeSessions.delete(token);
+      return res.status(401).json({
+        success: false,
+        error: 'Admin access required.',
+      });
+    }
+
+    const isSessionAdmin = session.role === 'admin' || session.isAdmin === true;
+    let isUserAdmin = false;
+    let userRecord = null;
+    if (session.userId) {
+      userRecord = db.users.findById(session.userId);
+      if (userRecord && (userRecord.role === 'admin' || userRecord.isAdmin === true)) {
+        isUserAdmin = true;
+      }
+    }
+
+    if (!isSessionAdmin && !isUserAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: 'Admin access required.',
+      });
+    }
+
+    adminOperator = {
+      id: session.userId || 'admin-user',
+      role: 'admin',
+      name: session.name || userRecord?.name || 'System Administrator',
+      phone: session.phone || userRecord?.phone || null,
+    };
+  }
+
+  // 2. Server-side Rate Limiting on Destructive Endpoint (10s execution cooldown, max 10 failed attempts / 15 mins)
+  const now = Date.now();
+  deleteAllUsersRateLimit.failedAttempts = (deleteAllUsersRateLimit.failedAttempts || []).filter((t) => now - t < 15 * 60 * 1000);
+  if (now - (deleteAllUsersRateLimit.lastExecutionTime || 0) < 10 * 1000) {
+    const waitSec = Math.ceil((10 * 1000 - (now - deleteAllUsersRateLimit.lastExecutionTime)) / 1000);
+    return res.status(429).json({
+      success: false,
+      error: `Rate limit active. Please wait ${waitSec} seconds before retrying.`,
+    });
+  }
+  if (deleteAllUsersRateLimit.failedAttempts.length >= 10) {
+    return res.status(429).json({
+      success: false,
+      error: 'Too many destructive attempts. Please wait a few minutes.',
+    });
+  }
+
+  // 3. Confirmation Phrase Validation
+  const { confirmationPhrase, confirmationText, phrase, adminPassword, passkey } = req.body || {};
+  const inputPhrase = (confirmationPhrase || confirmationText || phrase || '').trim();
+
+  if (inputPhrase !== 'DELETE ALL USERS') {
+    return res.status(400).json({
+      success: false,
+      code: 'INVALID_CONFIRMATION',
+      error: 'Confirmation text does not match.',
+    });
+  }
+
+  // 4. Admin Password / Secret Re-authentication
+  const inputPassword = adminPassword || passkey;
+  if (!inputPassword || typeof inputPassword !== 'string') {
+    return res.status(401).json({
+      success: false,
+      code: 'AUTH_FAILED',
+      error: 'Admin verification failed.',
+    });
+  }
+
+  const cleanPassword = inputPassword.trim();
+  const isSecretValid = Boolean(ADMIN_SECRET_KEY && cleanPassword === ADMIN_SECRET_KEY);
+  if (!isSecretValid) {
+    // Record rate limit attempt on failed password
+    deleteAllUsersRateLimit.failedAttempts.push(now);
+    return res.status(401).json({
+      success: false,
+      code: 'AUTH_FAILED',
+      error: 'Admin verification failed.',
+    });
+  }
+
+  // Set execution cooldown timestamp
+  deleteAllUsersRateLimit.lastExecutionTime = now;
+
+  // 5. Identification of User Accounts vs Protected Admin / System Accounts
+  const allUsers = db.users.findAll();
+  const isProtectedAdmin = (u) => {
+    if (!u) return false;
+    if (u.role === 'admin' || u.isAdmin === true || u.is_admin === true) return true;
+    if (adminOperator && adminOperator.id && (u.id === adminOperator.id || (adminOperator.phone && u.phone === adminOperator.phone))) return true;
+    return false;
+  };
+
+  const targetUsers = allUsers.filter((u) => !isProtectedAdmin(u));
+  const targetUserIds = new Set(targetUsers.map((u) => u.id));
+  const targetUserPhones = new Set(targetUsers.map((u) => u.phone).filter(Boolean));
+
+  // Snapshot memory state for atomic rollback in case of an error
+  const memorySnapshot = {
+    users: [...db.users.data],
+    profiles: [...db.profiles.data],
+    applications: [...db.applications.data],
+    subscriptions: [...db.subscriptions.data],
+    quotas: db.quotas ? [...db.quotas.data] : [],
+    rewards: db.rewards ? [...db.rewards.data] : [],
+    referrals: db.referrals ? [...db.referrals.data] : [],
+    dailyUsage: db.dailyUsage ? [...db.dailyUsage.data] : [],
+    activities: db.activities ? [...db.activities.data] : [],
+    tasks: db.tasks ? [...db.tasks.data] : [],
+    leads: db.leads ? [...db.leads.data] : [],
+    notifications: db.notifications ? [...db.notifications.data] : [],
+    preferences: db.preferences ? [...db.preferences.data] : [],
+    sessions: db.sessions ? [...db.sessions.data] : [],
+    otpVerifications: db.otpVerifications ? [...db.otpVerifications.data] : [],
+    deviceBindings: db.deviceBindings ? [...db.deviceBindings.data] : [],
+    sources: db.sources ? [...db.sources.data] : [],
+    jobs: db.jobs ? [...db.jobs.data] : [],
+    transactions: db.transactions ? [...db.transactions.data] : [],
+    paymentCustomers: db.paymentCustomers ? [...db.paymentCustomers.data] : [],
+    paymentOrders: db.paymentOrders ? [...db.paymentOrders.data] : [],
+  };
+
+  try {
+    // 6. Transactional Database Execution (PostgreSQL transaction if connected)
+    await db.transaction(async (client) => {
+      if (client && targetUserIds.size > 0) {
+        const idList = Array.from(targetUserIds);
+        const phoneList = Array.from(targetUserPhones);
+
+        // Dependent child tables deleted first to respect foreign keys
+        await client.query(`DELETE FROM applications WHERE user_id = ANY($1)`, [idList]).catch(() => {});
+        await client.query(`DELETE FROM profiles WHERE user_id = ANY($1) OR id = ANY($1)`, [idList]).catch(() => {});
+        await client.query(`DELETE FROM subscriptions WHERE user_id = ANY($1) OR phone = ANY($2)`, [idList, phoneList]).catch(() => {});
+        if (db.quotas) await client.query(`DELETE FROM quotas WHERE user_id = ANY($1)`, [idList]).catch(() => {});
+        if (db.rewards) await client.query(`DELETE FROM rewards WHERE user_id = ANY($1)`, [idList]).catch(() => {});
+        if (db.referrals) await client.query(`DELETE FROM referrals WHERE user_id = ANY($1) OR referrer_id = ANY($1)`, [idList]).catch(() => {});
+        if (db.dailyUsage) await client.query(`DELETE FROM daily_usage WHERE user_id = ANY($1)`, [idList]).catch(() => {});
+        if (db.deviceBindings) await client.query(`DELETE FROM device_bindings WHERE bound_user_id = ANY($1) OR bound_account_id = ANY($1) OR bound_phone = ANY($2)`, [idList, phoneList]).catch(() => {});
+        if (db.otpVerifications) await client.query(`DELETE FROM otp_verifications WHERE phone = ANY($1)`, [phoneList]).catch(() => {});
+        if (db.sessions) await client.query(`DELETE FROM sessions WHERE (user_id = ANY($1) OR phone = ANY($2)) AND role != 'admin' AND is_admin != true`, [idList, phoneList]).catch(() => {});
+        if (db.sources) await client.query(`DELETE FROM sources WHERE (user_id = ANY($1) OR owner_user_id = ANY($1)) AND type != 'builtin'`, [idList]).catch(() => {});
+        // Finally delete the users table rows (preserving admin)
+        await client.query(`DELETE FROM users WHERE id = ANY($1) AND role != 'admin' AND is_admin != true`, [idList]);
+      }
+
+      // Update in-memory / JSON collections
+      // A. Users
+      db.users.data = allUsers.filter((u) => isProtectedAdmin(u));
+      db.users.save();
+
+      // B. Profiles
+      db.profiles.data = db.profiles.data.filter((p) => {
+        if (targetUserIds.has(p.userId) || targetUserIds.has(p.id)) return false;
+        if (p.phone && targetUserPhones.has(p.phone)) return false;
+        if (p.userId && targetUserPhones.has(p.userId)) return false;
+        return true;
+      });
+      db.profiles.save();
+
+      // C. Applications
+      db.applications.data = db.applications.data.filter((a) => {
+        if (a.userId && (targetUserIds.has(a.userId) || targetUserPhones.has(a.userId))) return false;
+        return true;
+      });
+      db.applications.save();
+
+      // D. Subscriptions
+      db.subscriptions.data = db.subscriptions.data.filter((s) => {
+        if (s.userId && targetUserIds.has(s.userId)) return false;
+        if (s.phone && targetUserPhones.has(s.phone)) return false;
+        return true;
+      });
+      db.subscriptions.save();
+
+      // E. Quotas, Rewards, Referrals, Daily Usage
+      if (db.quotas) {
+        db.quotas.data = db.quotas.data.filter((q) => !targetUserIds.has(q.userId) && !targetUserPhones.has(q.userId));
+        db.quotas.save();
+      }
+      if (db.rewards) {
+        db.rewards.data = db.rewards.data.filter((r) => !targetUserIds.has(r.userId) && !targetUserPhones.has(r.userId));
+        db.rewards.save();
+      }
+      if (db.referrals) {
+        db.referrals.data = db.referrals.data.filter((r) => !targetUserIds.has(r.userId) && !targetUserIds.has(r.referrerId));
+        db.referrals.save();
+      }
+      if (db.dailyUsage) {
+        db.dailyUsage.data = db.dailyUsage.data.filter((d) => !targetUserIds.has(d.userId) && !targetUserPhones.has(d.userId));
+        db.dailyUsage.save();
+      }
+
+      // F. Auxiliary User Tables: tasks, leads, notifications, preferences
+      if (db.tasks) {
+        db.tasks.data = db.tasks.data.filter((t) => !targetUserIds.has(t.userId));
+        db.tasks.save();
+      }
+      if (db.leads) {
+        db.leads.data = db.leads.data.filter((l) => !targetUserIds.has(l.userId));
+        db.leads.save();
+      }
+      if (db.notifications) {
+        db.notifications.data = db.notifications.data.filter((n) => !targetUserIds.has(n.userId));
+        db.notifications.save();
+      }
+      if (db.preferences) {
+        db.preferences.data = db.preferences.data.filter((p) => !targetUserIds.has(p.userId));
+        db.preferences.save();
+      }
+
+      // G. Device Bindings & OTP records
+      if (db.deviceBindings) {
+        db.deviceBindings.data = db.deviceBindings.data.filter(
+          (b) => !targetUserIds.has(b.boundUserId) && !targetUserIds.has(b.boundAccountId) && !targetUserPhones.has(b.boundPhone)
+        );
+        db.deviceBindings.save();
+      }
+      if (db.otpVerifications) {
+        db.otpVerifications.data = db.otpVerifications.data.filter((o) => !targetUserPhones.has(o.phone));
+        db.otpVerifications.save();
+      }
+
+      // H. In-memory OTP Store & Rate Limits
+      const clearOtp = req.app.get('clearOtpState');
+      if (typeof clearOtp === 'function') {
+        clearOtp(Array.from(targetUserPhones));
+      }
+
+      // I. Sessions (Purge non-admin user sessions, strictly protect admin sessions)
+      if (db.sessions) {
+        db.sessions.data = db.sessions.data.filter((s) => {
+          const isUserRecord = targetUserIds.has(s.userId) || targetUserPhones.has(s.phone);
+          const isAdminSession = s.role === 'admin' || s.isAdmin === true;
+          return !isUserRecord || isAdminSession;
+        });
+        db.sessions.save();
+      }
+
+      // Clean activeSessions in-memory map
+      if (activeSessions && activeSessions.memoryCache) {
+        for (const [sToken, sData] of activeSessions.memoryCache.entries()) {
+          const isUserMatch = targetUserIds.has(sData.userId) || targetUserPhones.has(sData.phone);
+          const isSessionAdmin = sData.role === 'admin' || sData.isAdmin === true;
+          if (isUserMatch && !isSessionAdmin) {
+            activeSessions.memoryCache.delete(sToken);
+          }
+        }
+      }
+
+      // J. Sources: Delete custom sources created by target users; keep built-in sources
+      const builtinIds = new Set(SERVER_BUILTIN_SOURCES.map((s) => s.id));
+      db.sources.data = db.sources.data.filter((s) => {
+        if (s.type === 'builtin' || builtinIds.has(s.id) || (s.id && s.id.startsWith('demo-src-'))) return true;
+        if (s.userId && targetUserIds.has(s.userId)) return false;
+        if (s.ownerUserId && targetUserIds.has(s.ownerUserId)) return false;
+        return true;
+      });
+      db.sources.save();
+
+      // K. Jobs: Only delete user-created jobs; keep built-in opportunities
+      db.jobs.data = db.jobs.data.filter((j) => {
+        if (j.userId && targetUserIds.has(j.userId)) return false;
+        if (j.isUserOwned === true && j.ownerId && targetUserIds.has(j.ownerId)) return false;
+        return true;
+      });
+      db.jobs.save();
+
+      // L. Payment & Transaction Tables
+      if (db.transactions) {
+        db.transactions.data = db.transactions.data.filter((t) => !targetUserIds.has(t.userId));
+        db.transactions.save();
+      }
+      if (db.paymentCustomers) {
+        db.paymentCustomers.data = db.paymentCustomers.data.filter((c) => !targetUserIds.has(c.userId));
+        db.paymentCustomers.save();
+      }
+      if (db.paymentOrders) {
+        db.paymentOrders.data = db.paymentOrders.data.filter((o) => !targetUserIds.has(o.userId));
+        db.paymentOrders.save();
+      }
+
+      // M. Activities: Remove user-scoped activities
+      if (db.activities) {
+        db.activities.data = db.activities.data.filter((a) => !targetUserIds.has(a.userId));
+      }
+    });
+
+    // 7. Audit Log: Record administrative audit event
+    if (db.activities) {
+      db.activities.insert({
+        id: `act-delete-all-users-${Date.now()}`,
+        type: 'admin_delete_all_users',
+        action: 'DELETE_ALL_USERS',
+        actor: adminOperator.name,
+        adminId: adminOperator.id,
+        timestamp: new Date().toISOString(),
+        deletedUsers: targetUsers.length,
+        success: true,
+        details: {
+          deletedUserCount: targetUsers.length,
+          deletedPhonesCount: targetUserPhones.size,
+          ip: req.ip || 'unknown',
+        },
+        message: `Admin Delete All Users executed by ${adminOperator.name}: ${targetUsers.length} user accounts deleted`,
+      });
+      db.activities.save();
+    }
+
+    return res.json({
+      success: true,
+      message: 'All user accounts have been deleted.',
+      deletedUsers: targetUsers.length,
+      deletedCount: targetUsers.length,
+      preserved: {
+        admin: adminOperator.name,
+        sources: db.sources.count(),
+        jobs: db.jobs.count(),
+      },
+    });
+  } catch (err) {
+    console.error('[DELETE ALL USERS ERROR]:', err);
+    // Rollback in-memory state on error
+    for (const [table, rows] of Object.entries(memorySnapshot)) {
+      if (db[table] && Array.isArray(rows)) {
+        db[table].data = rows;
+        try { db[table].save(); } catch {}
+      }
+    }
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete users safely. State was rolled back and preserved.',
+    });
+  }
+};
+
+router.delete('/users/all', handleDeleteAllUsers);
+router.post('/users/delete-all', handleDeleteAllUsers);
+router.delete('/users', handleDeleteAllUsers);
+
 export default router;
 

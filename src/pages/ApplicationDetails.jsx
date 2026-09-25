@@ -4,15 +4,11 @@ import {
   ChevronLeft,
   Building2,
   Calendar,
-  Sparkles,
   ExternalLink,
   Edit3,
   Copy,
   Clock,
-  Send,
   FileText,
-  Briefcase,
-  CheckCircle,
   Paperclip,
 } from 'lucide-react';
 import toast from 'react-hot-toast';

@@ -8,13 +8,7 @@ import {
   Bookmark,
   Check,
   RotateCcw,
-  Facebook,
   CheckCircle2,
-  FilePlus2,
-  Globe,
-  Radio,
-  Youtube,
-  MessageSquare,
   SlidersHorizontal,
   ArrowUpDown,
   RefreshCw,
@@ -72,23 +66,37 @@ import {
   CATEGORIES,
 } from '../utils/constants';
 
-const PLATFORM_FILTERS = [
-  { id: 'all', label: 'All', icon: Globe },
-  { id: 'reddit', label: 'Reddit', icon: Radio, color: 'text-[#FF4500]' },
-  { id: 'youtube', label: 'YouTube', icon: Youtube, color: 'text-[#FF0000]' },
-  { id: 'x', label: 'X (Twitter)', icon: MessageSquare, color: 'text-text-primary' },
-  { id: 'facebook_group', label: 'Facebook', icon: Facebook, color: 'text-[#1877F2]' },
-  { id: 'manual_import', label: 'Manual', icon: FilePlus2, color: 'text-primary' },
-  { id: 'saved', label: 'Saved', icon: Bookmark, color: 'text-amber-500' },
-];
-
 const Jobs = () => {
   const navigate = useNavigate();
   const { profile } = useProfile();
-  const { sources } = useSources();
+  const { sources, customSources } = useSources();
 
   const [jobs, setJobs] = useState(() => getJobs());
-  const [activePlatformFilter, setActivePlatformFilter] = useState('all');
+  // User's own enabled custom sources (built-in sources do NOT appear as user filter chips)
+  const userCustomSources = useMemo(
+    () => (customSources || []).filter((s) => s.type === 'custom' && !s.isBuiltin && !s.isDemo && s.enabled !== false),
+    [customSources]
+  );
+  const [selectedCustomSourceId, setSelectedCustomSourceId] = useState(null);
+
+  // If the currently selected custom source was removed or disabled, reset filter
+  useEffect(() => {
+    if (selectedCustomSourceId && !userCustomSources.some((s) => s.id === selectedCustomSourceId)) {
+      setSelectedCustomSourceId(null);
+    }
+  }, [selectedCustomSourceId, userCustomSources]);
+
+  // Listen for dynamic source changes across the app
+  useEffect(() => {
+    const handleSourcesChange = () => {
+      refreshJobs();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('tf_sources_changed', handleSourcesChange);
+      return () => window.removeEventListener('tf_sources_changed', handleSourcesChange);
+    }
+  }, []);
+
   const [viewMode, setViewMode] = useState('swipe'); // 'swipe' | 'list'
   const [currentIndex, setCurrentIndex] = useState(0);
   const [history, setHistory] = useState([]); // for Undo
@@ -329,26 +337,32 @@ const Jobs = () => {
     let result = jobs.filter((j) => {
       const userJobState = getUserJobState(j.id, currentUserId);
 
-      // Platform filter
-      if (activePlatformFilter === 'saved') {
-        if (userJobState !== 'saved' && !userSavedIds.has(String(j.id))) return false;
-      } else {
-        // Active feed: MUST EXCLUDE any job that is saved, draft, applied, or skipped for this user
-        if (
-          userJobState === 'saved' ||
-          userJobState === 'draft' ||
-          userJobState === 'applied' ||
-          userJobState === 'skipped'
-        ) {
-          return false;
+      // Active feed: MUST EXCLUDE any job that is saved, draft, applied, or skipped for this user
+      if (
+        userJobState === 'saved' ||
+        userJobState === 'draft' ||
+        userJobState === 'applied' ||
+        userJobState === 'skipped'
+      ) {
+        return false;
+      }
+      // User-scoped applied filter: applied jobs are excluded only for this user
+      if (userAppliedIds.has(String(j.id)) || isJobAppliedByUser(j.id, currentUserId)) return false;
+
+      // Custom Source filter: when a user's custom source is selected, only show jobs from that source
+      if (selectedCustomSourceId) {
+        const targetSource = userCustomSources.find((s) => s.id === selectedCustomSourceId);
+        if (targetSource) {
+          const matchesSource =
+            j.sourceId === targetSource.id ||
+            (targetSource.url && (j.sourceUrl === targetSource.url || j.postUrl === targetSource.url)) ||
+            (targetSource.name && (j.company === targetSource.name || j.sourceName === targetSource.name || j.client === targetSource.name));
+          if (!matchesSource) return false;
         }
-        // User-scoped applied filter: applied jobs are excluded only for this user
-        if (userAppliedIds.has(String(j.id)) || isJobAppliedByUser(j.id, currentUserId)) return false;
-        if (activePlatformFilter !== 'all' && j.platform !== activePlatformFilter) return false;
       }
 
       // In Quick Apply mode: STRICTLY require direct contact and minimum match qualification
-      if (quickApplyActive && activePlatformFilter !== 'saved') {
+      if (quickApplyActive) {
         const contactValid = hasDirectContact(j);
         if (!contactValid) return false;
         const minThreshold = Number(profile?.userPreferences?.minMatchScore) || 70;
@@ -423,7 +437,7 @@ const Jobs = () => {
     });
 
     return result;
-  }, [jobs, activePlatformFilter, remoteFilter, jobTypeFilter, matchScoreFilter, categoryFilter, sortBy, quickApplyActive, profile?.userPreferences?.minMatchScore, userAppliedIds, userSavedIds, currentUserId]);
+  }, [jobs, selectedCustomSourceId, userCustomSources, remoteFilter, jobTypeFilter, matchScoreFilter, categoryFilter, sortBy, quickApplyActive, profile?.userPreferences?.minMatchScore, userAppliedIds, userSavedIds, currentUserId]);
 
 
   // Bound index safely
@@ -920,7 +934,11 @@ const Jobs = () => {
                         <button
                           type="button"
                           onClick={() => {
-                            if (s.platform) setActivePlatformFilter(s.platform);
+                            if (s.platform && userCustomSources.some((cs) => cs.id === s.platform)) {
+                              setSelectedCustomSourceId(s.platform);
+                            } else {
+                              setSelectedCustomSourceId(null);
+                            }
                             if (s.remote) setRemoteFilter(s.remote);
                             if (s.jobType) setJobTypeFilter(s.jobType);
                             if (s.minScore) setMatchScoreFilter(String(s.minScore));
@@ -984,30 +1002,34 @@ const Jobs = () => {
           );
         })()}
 
-        {/* Source Filter Chips */}
-        <div className="flex gap-1.5 mt-4 overflow-x-auto pb-1 scrollbar-hide">
-          {PLATFORM_FILTERS.map((pf) => {
-            const isSelected = activePlatformFilter === pf.id;
-            const Icon = pf.icon;
-            return (
-              <button
-                key={pf.id}
-                onClick={() => {
-                  setActivePlatformFilter(pf.id);
-                  setCurrentIndex(0);
-                }}
-                className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all flex items-center gap-1.5 ${
-                  isSelected
-                    ? 'bg-primary text-white shadow-sm'
-                    : 'bg-surface-hover text-text-secondary hover:text-text-primary border border-border'
-                }`}
-              >
-                {Icon && <Icon size={12} className={pf.color} />}
-                <span>{pf.label}</span>
-              </button>
-            );
-          })}
-        </div>
+        {/* Custom Source Filter Chips (Hidden completely when user has 0 custom sources) */}
+        {userCustomSources.length > 0 && (
+          <div className="flex items-center gap-1.5 mt-4 overflow-x-auto pb-1 scrollbar-hide" data-testid="user-sources-filter-bar">
+            <span className="text-[11px] font-semibold text-text-muted whitespace-nowrap mr-0.5">
+              My Sources:
+            </span>
+            {userCustomSources.map((cs) => {
+              const isSelected = selectedCustomSourceId === cs.id;
+              return (
+                <button
+                  key={cs.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedCustomSourceId((prev) => (prev === cs.id ? null : cs.id));
+                    setCurrentIndex(0);
+                  }}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all flex items-center gap-1.5 ${
+                    isSelected
+                      ? 'bg-primary text-white shadow-sm'
+                      : 'bg-surface-hover text-text-secondary hover:text-text-primary border border-border'
+                  }`}
+                >
+                  <span>{cs.name || cs.groupName || 'Custom Source'}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* Main Feed Content Area */}
         <div className="mt-5 flex-1 flex flex-col">
@@ -1017,12 +1039,10 @@ const Jobs = () => {
                 <CheckCircle2 size={32} className="text-primary" />
               </div>
               <h3 className="text-lg font-bold text-text-primary">
-                {activePlatformFilter === 'saved' ? 'No Saved Jobs Yet' : 'No Opportunities Found'}
+                No Opportunities Found
               </h3>
               <p className="text-xs text-text-secondary max-w-[260px] mt-1 mb-6">
-                {activePlatformFilter === 'saved'
-                  ? 'Jobs you save with swipe up or the Save button will appear here.'
-                  : 'Try relaxing your filter criteria or connect more sources to discover opportunities.'}
+                Try relaxing your filter criteria or connect more sources to discover opportunities.
               </p>
               <div className="flex flex-col gap-2 w-full max-w-xs">
                 <Button
@@ -1037,12 +1057,12 @@ const Jobs = () => {
                 <Button variant="secondary" size="sm" onClick={() => navigate('/import-jobs')}>
                   + Connect More Sources
                 </Button>
-                {(activePlatformFilter !== 'all' || activeFiltersCount > 0) && (
+                {(selectedCustomSourceId || activeFiltersCount > 0) && (
                   <Button
                     variant="secondary"
                     size="sm"
                     onClick={() => {
-                      setActivePlatformFilter('all');
+                      setSelectedCustomSourceId(null);
                       setRemoteFilter('all');
                       setJobTypeFilter('all');
                       setMatchScoreFilter('all');
@@ -1051,7 +1071,7 @@ const Jobs = () => {
                       refreshJobs();
                     }}
                   >
-                    Clear All Filters
+                    Clear Filter
                   </Button>
                 )}
               </div>
@@ -1214,7 +1234,7 @@ const Jobs = () => {
 
           <div className="p-3 rounded-xl bg-surface-hover border border-border space-y-1 text-text-muted">
             <p className="font-semibold text-text-primary mb-1">Filter summary:</p>
-            <p>• Platform: <span className="text-text-primary capitalize">{activePlatformFilter}</span></p>
+            <p>• Source: <span className="text-text-primary">{userCustomSources.find((cs) => cs.id === selectedCustomSourceId)?.name || 'All Opportunities'}</span></p>
             <p>• Location: <span className="text-text-primary capitalize">{remoteFilter}</span></p>
             <p>• Job Type: <span className="text-text-primary capitalize">{jobTypeFilter}</span></p>
             <p>• Min Match Score: <span className="text-text-primary">{matchScoreFilter === 'all' ? 'Any' : `${matchScoreFilter}%`}</span></p>
@@ -1240,7 +1260,7 @@ const Jobs = () => {
                 }
                 const newSearch = createSavedSearch({
                   name: newSearchName.trim(),
-                  platform: activePlatformFilter,
+                  platform: selectedCustomSourceId || 'all',
                   remote: remoteFilter,
                   jobType: jobTypeFilter,
                   minScore: matchScoreFilter === 'all' ? 60 : parseInt(matchScoreFilter, 10),

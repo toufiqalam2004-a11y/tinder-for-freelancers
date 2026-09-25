@@ -6,6 +6,7 @@ import { subscriptionService } from '../services/subscriptionService.js';
 import { normalizePlan, isProPlan } from '../utils/planUtils.js';
 import toast from 'react-hot-toast';
 import { rewardService } from '../services/rewardService.js';
+import { getOrCreateDeviceId } from '../utils/device.js';
 
 const AuthContext = createContext(null);
 
@@ -79,9 +80,13 @@ export function AuthProvider({ children }) {
     }
 
     try {
+      const deviceId = details.deviceId || getOrCreateDeviceId();
       const result = await apiClient.sendOtp(validation.normalizedNumber, {
         countryCode: validation.countryCode,
         localNumber: validation.localNumber,
+        mode: details.mode,
+        captchaToken: details.captchaToken,
+        deviceId,
       });
 
       if (result.success) {
@@ -114,15 +119,17 @@ export function AuthProvider({ children }) {
     }
   }, [countryCode]);
 
-  const verifyOtp = useCallback(async (code) => {
+  const verifyOtp = useCallback(async (code, details = {}) => {
     setAuthLoading(true);
     setAuthError('');
     try {
       const pendingRef = rewardService.getPendingReferralCode();
+      const deviceId = details.deviceId || getOrCreateDeviceId();
       const result = await apiClient.verifyOtp(phone, code, {
         countryCode,
         localNumber,
         referralCode: pendingRef,
+        deviceId,
       });
 
       if (result.success) {

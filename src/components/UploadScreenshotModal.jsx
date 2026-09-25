@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Image as ImageIcon, Sparkles, UploadCloud, CheckCircle2 } from 'lucide-react';
+import { Sparkles, UploadCloud, CheckCircle2 } from 'lucide-react';
 import Modal from './Modal';
 import Button from './Button';
 

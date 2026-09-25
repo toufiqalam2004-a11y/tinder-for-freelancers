@@ -17,9 +17,39 @@ const SourcesContext = createContext(null);
 export function SourcesProvider({ children }) {
   const [sources, setSources] = useState(() => getSources());
 
+  const syncFromServer = useCallback(async () => {
+    const auth = getAuth();
+    const token = auth?.token;
+    const currentUserId = auth?.userId;
+    if (!token && !currentUserId) return;
+    try {
+      const headers = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      if (currentUserId) headers['x-user-id'] = currentUserId;
+      const res = await fetch(getApiUrl('/sources'), { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.customSources)) {
+          const builtin = getBuiltinSources();
+          const userCustom = data.customSources.filter(
+            (s) => s.userId === currentUserId || s.ownerUserId === currentUserId
+          );
+          const merged = [...builtin, ...userCustom];
+          saveSources(merged);
+          setSources(merged);
+        }
+      }
+    } catch {}
+  }, []);
+
   const reloadSources = useCallback(() => {
     setSources(getSources());
-  }, []);
+    syncFromServer();
+  }, [syncFromServer]);
+
+  useEffect(() => {
+    syncFromServer();
+  }, [syncFromServer]);
 
   useEffect(() => {
     window.addEventListener('storage', reloadSources);
@@ -39,11 +69,14 @@ export function SourcesProvider({ children }) {
   const customSources = useMemo(() => {
     const auth = getAuth();
     const currentUserId = auth?.userId;
-    return sources.filter(
-      (s) =>
-        (s.type === 'custom' || (!s.isBuiltin && !s.isDemo)) &&
-        (!currentUserId || !s.userId || s.userId === currentUserId || s.ownerUserId === currentUserId)
-    );
+    return sources.filter((s) => {
+      const isBuiltin = s.type === 'builtin' || s.isBuiltin || s.isDemo;
+      if (isBuiltin) return false;
+      if (currentUserId) {
+        return s.userId === currentUserId || s.ownerUserId === currentUserId;
+      }
+      return true;
+    });
   }, [sources]);
 
   const addSource = useCallback(
@@ -104,6 +137,7 @@ export function SourcesProvider({ children }) {
 
       const updated = persistAdd(source);
       setSources([...updated]);
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('tf_sources_changed'));
       return source;
     },
     [customSources.length]
@@ -133,6 +167,7 @@ export function SourcesProvider({ children }) {
 
       const updated = persistRemove(id, auth?.userId);
       setSources([...updated]);
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('tf_sources_changed'));
     },
     [sources]
   );
@@ -159,6 +194,7 @@ export function SourcesProvider({ children }) {
 
       const updated = persistUpdate(id, updates, auth?.userId);
       setSources([...updated]);
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('tf_sources_changed'));
     },
     [sources]
   );
@@ -186,6 +222,7 @@ export function SourcesProvider({ children }) {
 
       const updated = persistToggle(id, auth?.userId);
       setSources([...updated]);
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('tf_sources_changed'));
     },
     [sources]
   );

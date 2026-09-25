@@ -6,7 +6,6 @@ import {
   Facebook,
   FilePlus2,
   ChevronRight,
-  Sparkles,
   Check,
   Search,
 } from 'lucide-react';

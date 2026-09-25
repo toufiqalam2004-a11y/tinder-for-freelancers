@@ -32,7 +32,7 @@ export default function AppHeader() {
   }, []);
 
   // Starting/onboarding/login/landing/admin routes where in-app header must NOT be shown
-  const onboardingPaths = ['/', '/login', '/welcome', '/verify-otp', '/profile-setup'];
+  const onboardingPaths = ['/', '/login', '/signup', '/welcome', '/verify-otp', '/profile-setup'];
   const isOnboarding = onboardingPaths.includes(location.pathname) || location.pathname.startsWith('/admin');
 
   if (isOnboarding) {

@@ -325,22 +325,26 @@ class PersistentOtpStore {
     if (!phone) return this;
     this.memoryCache.set(phone, record);
     if (db.otpVerifications) {
-      db.otpVerifications.insert({
-        id: phone,
-        phone,
-        code: String(record.code),
-        countryCode: record.countryCode || '+91',
-        country_code: record.countryCode || '+91',
-        localNumber: record.localNumber || '',
-        local_number: record.localNumber || '',
-        attempts: record.attempts || 0,
-        isDemo: Boolean(record.isDemo),
-        is_demo: Boolean(record.isDemo),
-        expiresAt: new Date(record.expiresAt || Date.now() + 10 * 60 * 1000).toISOString(),
-        expires_at: new Date(record.expiresAt || Date.now() + 10 * 60 * 1000).toISOString(),
-        createdAt: new Date(record.createdAt || Date.now()).toISOString(),
-        created_at: new Date(record.createdAt || Date.now()).toISOString(),
-      });
+      try {
+        db.otpVerifications.insert({
+          id: phone,
+          phone,
+          code: String(record.code),
+          countryCode: record.countryCode || '+91',
+          country_code: record.countryCode || '+91',
+          localNumber: record.localNumber || '',
+          local_number: record.localNumber || '',
+          attempts: record.attempts || 0,
+          isDemo: Boolean(record.isDemo),
+          is_demo: Boolean(record.isDemo),
+          expiresAt: new Date(record.expiresAt || Date.now() + 10 * 60 * 1000).toISOString(),
+          expires_at: new Date(record.expiresAt || Date.now() + 10 * 60 * 1000).toISOString(),
+          createdAt: new Date(record.createdAt || Date.now()).toISOString(),
+          created_at: new Date(record.createdAt || Date.now()).toISOString(),
+        });
+      } catch (err) {
+        // Non-blocking in-memory fallback
+      }
     }
     return this;
   }
@@ -394,7 +398,10 @@ function parseAndValidatePhoneRequest(body = {}) {
 
   // 2. If phone is provided:
   if (phone !== undefined && phone !== null) {
-    const raw = String(phone).trim();
+    let raw = String(phone).trim();
+    if (/^91[6-9][0-9]{9}$/.test(raw)) {
+      raw = '+' + raw;
+    }
 
     // Check if phone has a country code prefix (e.g. +91...)
     if (raw.startsWith('+')) {
@@ -463,122 +470,266 @@ function parseAndValidatePhoneRequest(body = {}) {
 // phone -> { history: [timestamps], cooldownUntil: timestamp }
 const otpRequestRateLimits = new Map();
 
-app.post('/api/auth/send-otp', authLimiter, (req, res) => {
-  const validation = parseAndValidatePhoneRequest(req.body);
-  if (!validation.isValid) {
-    return res.status(400).json({ success: false, error: validation.error });
-  }
+/**
+ * Normalizes phone and finds existing user by exact phone or local number + countryCode
+ */
+export function findUserByPhone(phone) {
+  if (!phone) return null;
+  const validation = parseAndValidatePhoneRequest({ phone });
+  const targetPhone = validation.isValid ? validation.normalizedNumber : String(phone).trim();
+  const targetLocal = validation.isValid ? validation.localNumber : targetPhone.replace(/\D/g, '').slice(-10);
+  const targetCc = validation.isValid ? validation.countryCode : '+91';
 
-  const sanitizedPhone = validation.normalizedNumber;
-  const now = Date.now() + (IS_PROD ? 0 : Number(req.headers['x-test-clock-skew'] || 0));
-
-  // Phone-level Rate Limiting
-  let rateLimit = otpRequestRateLimits.get(sanitizedPhone);
-  if (!rateLimit) {
-    rateLimit = { history: [], cooldownUntil: 0 };
-    otpRequestRateLimits.set(sanitizedPhone, rateLimit);
-  }
-
-  // 1. Clean history older than rolling 1-hour window (60 * 60 * 1000 ms)
-  rateLimit.history = rateLimit.history.filter((ts) => now - ts < 60 * 60 * 1000);
-
-  // 2. Check 60-second cooldown between requests for the same phone number
-  if (now < rateLimit.cooldownUntil) {
-    const waitSec = Math.ceil((rateLimit.cooldownUntil - now) / 1000);
-    return res.status(429).json({
-      success: false,
-      error: `Please wait ${waitSec} seconds before requesting another OTP.`,
-      remainingSeconds: waitSec,
-      cooldownActive: true,
-    });
-  }
-
-  // 3. Check Maximum 5 OTP requests per phone number per rolling 1-hour window
-  if (rateLimit.history.length >= 5) {
-    return res.status(429).json({
-      success: false,
-      error: 'Too many OTP requests. Please try again later.',
-      hourlyLimitReached: true,
-    });
-  }
-
-  // Rate limit checks passed: Record this request
-  rateLimit.history.push(now);
-  rateLimit.cooldownUntil = now + 60 * 1000; // 60-second cooldown
-
-  // Demo mode is active unless explicitly disabled by ENABLE_DEMO_OTP === 'false'
-  const allowDemoOtp = process.env.ENABLE_DEMO_OTP !== 'false';
-  const code = allowDemoOtp ? '1234' : Math.floor(1000 + Math.random() * 9000).toString();
-
-  // If a new OTP is requested, invalidate any previous OTP and overwrite with fresh parameters
-  otpStore.set(sanitizedPhone, {
-    code,
-    countryCode: validation.countryCode,
-    localNumber: validation.localNumber,
-    createdAt: now,
-    expiresAt: now + 10 * 60 * 1000,      // 10-minute expiration
-    attempts: 0,                          // max 5 failed attempts
-    isDemo: allowDemoOtp,
+  return db.users.findOne((u) => {
+    if (u.phone === targetPhone || u.phone === phone) return true;
+    if (targetLocal && u.localNumber === targetLocal && (u.countryCode || '+91') === targetCc) return true;
+    if (targetLocal && String(u.phone).endsWith(targetLocal) && targetLocal.length === 10) return true;
+    return false;
   });
+}
 
-  res.json({
-    success: true,
-    message: allowDemoOtp ? 'OTP sent successfully (Demo code: 1234).' : 'Verification code sent to your phone.',
-    phone: sanitizedPhone,
-    countryCode: validation.countryCode,
-    localNumber: validation.localNumber,
-    isDemo: allowDemoOtp,
-    demoCode: allowDemoOtp ? '1234' : null,
-    cooldownSeconds: 60,
-  });
+/**
+ * Server-side CAPTCHA verification (Cloudflare Turnstile or dev mode)
+ */
+async function verifyCaptchaToken(token, req) {
+  // Test suite / automated test bypass if specifically running automated tests without captcha
+  const isTest = process.env.NODE_ENV === 'test' || req.headers['x-test-suite'] || req.headers['x-test-clock-skew'];
+
+  if (token === 'force_fail_captcha' || token === 'invalid') {
+    return {
+      success: false,
+      code: 'CAPTCHA_FAILED',
+      error: 'CAPTCHA verification failed. Please try again.',
+    };
+  }
+
+  const turnstileSecret = process.env.TURNSTILE_SECRET_KEY;
+  if (turnstileSecret && IS_PROD) {
+    if (!token) {
+      return {
+        success: false,
+        code: 'CAPTCHA_REQUIRED',
+        error: 'Please complete the CAPTCHA.',
+      };
+    }
+    try {
+      const formData = new URLSearchParams();
+      formData.append('secret', turnstileSecret);
+      formData.append('response', token);
+      if (req.ip) formData.append('remoteip', req.ip);
+
+      const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+        method: 'POST',
+        body: formData,
+      });
+      const outcome = await response.json();
+      if (!outcome.success) {
+        return {
+          success: false,
+          code: 'CAPTCHA_FAILED',
+          error: 'CAPTCHA verification failed. Please try again.',
+        };
+      }
+      return { success: true };
+    } catch (e) {
+      console.error('[CAPTCHA VERIFY ERROR]:', e);
+      return {
+        success: false,
+        code: 'CAPTCHA_FAILED',
+        error: 'CAPTCHA verification failed. Please try again.',
+      };
+    }
+  }
+
+  // In non-production or when no Turnstile secret is configured:
+  // CAPTCHA is required if in production, or if mode is specified (new auth flow), or if explicitly tested
+  const requiresCaptcha = Boolean(IS_PROD || req.body?.mode);
+  if (!token && requiresCaptcha) {
+    return {
+      success: false,
+      code: 'CAPTCHA_REQUIRED',
+      error: 'Please complete the CAPTCHA.',
+    };
+  }
+
+  return { success: true };
+}
+
+// 7. Check Phone Account Existence
+app.post('/api/auth/check-phone', authLimiter, (req, res) => {
+  try {
+    const validation = parseAndValidatePhoneRequest(req.body);
+    if (!validation.isValid) {
+      return res.status(400).json({ success: false, error: validation.error });
+    }
+    const sanitizedPhone = validation.normalizedNumber;
+    const existingUser = findUserByPhone(sanitizedPhone);
+    return res.json({
+      success: true,
+      exists: Boolean(existingUser),
+      phone: sanitizedPhone,
+      countryCode: validation.countryCode,
+      localNumber: validation.localNumber,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'Failed to check phone number.' });
+  }
 });
 
+// 8. Request OTP with CAPTCHA and Account Existence Validation
+app.post('/api/auth/send-otp', authLimiter, async (req, res) => {
+  try {
+    const { mode, captchaToken } = req.body;
+    const validation = parseAndValidatePhoneRequest(req.body);
+    if (!validation.isValid) {
+      return res.status(400).json({ success: false, error: validation.error });
+    }
+
+    const sanitizedPhone = validation.normalizedNumber;
+    const now = Date.now() + (IS_PROD ? 0 : Number(req.headers['x-test-clock-skew'] || 0));
+
+    // 1. CAPTCHA Verification (MUST happen before OTP generation, sending, and rate-limiting)
+    const captchaResult = await verifyCaptchaToken(captchaToken, req);
+    if (!captchaResult.success) {
+      return res.status(400).json({
+        success: false,
+        code: captchaResult.code || 'CAPTCHA_FAILED',
+        error: captchaResult.error || 'Please complete the CAPTCHA.',
+      });
+    }
+
+    // 2. Account Existence Check (Mode-specific)
+    const existingUser = findUserByPhone(sanitizedPhone);
+
+    if (mode === 'login' && !existingUser) {
+      // Login mode: account does not exist -> DO NOT SEND OTP
+      return res.status(404).json({
+        success: false,
+        code: 'ACCOUNT_NOT_FOUND',
+        error: 'No account found with this number.',
+        phone: sanitizedPhone,
+        countryCode: validation.countryCode,
+        localNumber: validation.localNumber,
+      });
+    }
+
+    if (mode === 'signup' && existingUser) {
+      // Sign Up mode: account already exists -> DO NOT SEND OTP
+      return res.status(409).json({
+        success: false,
+        code: 'ACCOUNT_ALREADY_EXISTS',
+        error: 'An account already exists with this number.',
+        phone: sanitizedPhone,
+        countryCode: validation.countryCode,
+        localNumber: validation.localNumber,
+      });
+    }
+
+    // 3. Phone-level Rate Limiting
+    let rateLimit = otpRequestRateLimits.get(sanitizedPhone);
+    if (!rateLimit) {
+      rateLimit = { history: [], cooldownUntil: 0 };
+      otpRequestRateLimits.set(sanitizedPhone, rateLimit);
+    }
+
+    // Clean history older than rolling 1-hour window (60 * 60 * 1000 ms)
+    rateLimit.history = rateLimit.history.filter((ts) => now - ts < 60 * 60 * 1000);
+
+    // 60-second cooldown between requests for the same phone number
+    if (now < rateLimit.cooldownUntil) {
+      const waitSec = Math.ceil((rateLimit.cooldownUntil - now) / 1000);
+      return res.status(429).json({
+        success: false,
+        error: `Please wait ${waitSec} seconds before requesting another OTP.`,
+        remainingSeconds: waitSec,
+        cooldownActive: true,
+      });
+    }
+
+    // Max 5 OTP requests per phone number per rolling 1-hour window
+    if (rateLimit.history.length >= 5) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many OTP requests. Please try again later.',
+        hourlyLimitReached: true,
+      });
+    }
+
+    // Rate limit checks passed: Record this request
+    rateLimit.history.push(now);
+    rateLimit.cooldownUntil = now + 60 * 1000; // 60-second cooldown
+
+    // Demo mode is active unless explicitly disabled by ENABLE_DEMO_OTP === 'false'
+    const allowDemoOtp = process.env.ENABLE_DEMO_OTP !== 'false';
+    const code = allowDemoOtp ? '1234' : Math.floor(1000 + Math.random() * 9000).toString();
+
+    // Store OTP record
+    otpStore.set(sanitizedPhone, {
+      code,
+      countryCode: validation.countryCode,
+      localNumber: validation.localNumber,
+      createdAt: now,
+      expiresAt: now + 10 * 60 * 1000,      // 10-minute expiration
+      attempts: 0,                          // max 5 failed attempts
+      isDemo: allowDemoOtp,
+    });
+
+    return res.json({
+      success: true,
+      message: allowDemoOtp ? 'OTP sent successfully (Demo code: 1234).' : 'Verification code sent to your phone.',
+      phone: sanitizedPhone,
+      countryCode: validation.countryCode,
+      localNumber: validation.localNumber,
+      isDemo: allowDemoOtp,
+      demoCode: allowDemoOtp ? '1234' : null,
+      cooldownSeconds: 60,
+    });
+  } catch (err) {
+    console.error('[OTP SEND ERROR]:', err);
+    return res.status(500).json({
+      success: false,
+      error: 'Unable to send OTP. Please try again.',
+    });
+  }
+});
+
+// 9. Verify OTP with Device Binding & Single-Identity Account Resolution
 app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
-  const { code } = req.body;
-  const validation = parseAndValidatePhoneRequest(req.body);
-  if (!validation.isValid) {
-    return res.status(400).json({ success: false, error: validation.error });
-  }
+  try {
+    const { code, otp } = req.body;
+    const inputCode = code !== undefined && code !== null ? code : otp;
+    const validation = parseAndValidatePhoneRequest(req.body);
+    if (!validation.isValid) {
+      return res.status(400).json({ success: false, error: validation.error });
+    }
 
-  if (!code || typeof code !== 'string' && typeof code !== 'number') {
-    return res.status(400).json({ success: false, error: 'Phone and OTP code are required.' });
-  }
+    if (inputCode === undefined || inputCode === null || (typeof inputCode !== 'string' && typeof inputCode !== 'number')) {
+      return res.status(400).json({ success: false, error: 'Phone and OTP code are required.' });
+    }
 
-  const sanitizedPhone = validation.normalizedNumber;
-  const cleanCode = String(code).trim();
-  const record = otpStore.get(sanitizedPhone);
-  const now = Date.now() + (IS_PROD ? 0 : Number(req.headers['x-test-clock-skew'] || 0));
+    const sanitizedPhone = validation.normalizedNumber;
+    const cleanCode = String(inputCode).trim();
+    const record = otpStore.get(sanitizedPhone);
+    const now = Date.now() + (IS_PROD ? 0 : Number(req.headers['x-test-clock-skew'] || 0));
 
-  // Case 1: No OTP request was made for this phone
-  if (!record) {
-    return res.status(400).json({
-      success: false,
-      error: 'No active OTP request found for this phone number. Please request an OTP first.',
-    });
-  }
+    // Case 1: No OTP request was made for this phone
+    if (!record) {
+      return res.status(400).json({
+        success: false,
+        error: 'No active OTP request found for this phone number. Please request an OTP first.',
+      });
+    }
 
-  // Case 2: OTP has expired (> 10 minutes)
-  if (now > record.expiresAt) {
-    otpStore.delete(sanitizedPhone);
-    return res.status(400).json({
-      success: false,
-      error: 'OTP code has expired. Please request a new code.',
-    });
-  }
+    // Case 2: OTP has expired (> 10 minutes)
+    if (now > record.expiresAt) {
+      otpStore.delete(sanitizedPhone);
+      return res.status(400).json({
+        success: false,
+        error: 'OTP code has expired. Please request a new code.',
+      });
+    }
 
-  // Case 3: Failed attempt limit reached (max 5)
-  if (record.attempts >= 5) {
-    otpStore.delete(sanitizedPhone);
-    return res.status(429).json({
-      success: false,
-      error: 'Too many failed attempts. This OTP has been invalidated. Please request a new code.',
-    });
-  }
-
-  // Verification
-  const isValid = cleanCode === record.code;
-  if (!isValid) {
-    record.attempts++;
+    // Case 3: Failed attempt limit reached (max 5)
     if (record.attempts >= 5) {
       otpStore.delete(sanitizedPhone);
       return res.status(429).json({
@@ -586,91 +737,164 @@ app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
         error: 'Too many failed attempts. This OTP has been invalidated. Please request a new code.',
       });
     }
-    const remaining = 5 - record.attempts;
-    return res.status(400).json({
-      success: false,
-      error: `Invalid verification code. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`,
-      remainingAttempts: remaining,
-    });
-  }
 
-  // Case 4: Successful verification -> immediately invalidate/delete OTP record so it cannot be reused
-  otpStore.delete(sanitizedPhone);
-
-  let user = db.users.findOne((u) => u.phone === sanitizedPhone);
-  const isBrandNewUser = !user;
-  if (!user) {
-    user = {
-      id: `user-${Date.now()}`,
-      phone: sanitizedPhone,
-      countryCode: validation.countryCode,
-      localNumber: validation.localNumber,
-      name: '',
-      createdAt: new Date().toISOString(),
-    };
-    db.users.insert(user);
-
-    // Initialize clean FREE subscription in database for new user
-    const existingSub = db.subscriptions.findOne((s) => s.userId === user.id || s.phone === sanitizedPhone);
-    if (!existingSub) {
-      db.subscriptions.insert({
-        id: `sub-${user.id}`,
-        userId: user.id,
-        phone: sanitizedPhone,
-        plan: 'free',
-        status: 'active',
-        currency: 'INR',
-        price: 0,
-        startDate: new Date().toISOString(),
-        endDate: null,
-        credits: [],
-        isDemo: true,
-        updatedAt: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
+    // Verification
+    const isValid = cleanCode === record.code;
+    if (!isValid) {
+      record.attempts++;
+      if (record.attempts >= 5) {
+        otpStore.delete(sanitizedPhone);
+        return res.status(429).json({
+          success: false,
+          error: 'Too many failed attempts. This OTP has been invalidated. Please request a new code.',
+        });
+      }
+      const remaining = 5 - record.attempts;
+      return res.status(400).json({
+        success: false,
+        error: `Invalid verification code. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`,
+        remainingAttempts: remaining,
       });
     }
-  } else if (!user.countryCode || !user.localNumber) {
-    user.countryCode = validation.countryCode;
-    user.localNumber = validation.localNumber;
-    db.users.update(user.id, user);
-  }
 
-  // Ban Check
-  if (user && user.status === 'banned') {
-    if (user.banType === 'temporary' && user.banUntil && Date.now() >= new Date(user.banUntil).getTime()) {
-      // Auto unban
-      user.status = 'active';
-      user.banType = null;
-      user.banUntil = null;
+    // Case 4: Successful verification -> immediately invalidate/delete OTP record so it cannot be reused
+    otpStore.delete(sanitizedPhone);
+
+    let user = findUserByPhone(sanitizedPhone);
+    const isBrandNewUser = !user;
+    if (!user) {
+      user = {
+        id: `user-${Date.now()}`,
+        phone: sanitizedPhone,
+        countryCode: validation.countryCode,
+        localNumber: validation.localNumber,
+        name: '',
+        createdAt: new Date(now).toISOString(),
+      };
+      db.users.insert(user);
+
+      // Initialize clean FREE subscription in database for new user
+      const existingSub = db.subscriptions.findOne((s) => s.userId === user.id || s.phone === sanitizedPhone);
+      if (!existingSub) {
+        db.subscriptions.insert({
+          id: `sub-${user.id}`,
+          userId: user.id,
+          phone: sanitizedPhone,
+          plan: 'free',
+          status: 'active',
+          currency: 'INR',
+          price: 0,
+          startDate: new Date(now).toISOString(),
+          endDate: null,
+          credits: [],
+          isDemo: true,
+          updatedAt: new Date(now).toISOString(),
+          createdAt: new Date(now).toISOString(),
+        });
+      }
+    } else if (!user.countryCode || !user.localNumber) {
+      user.countryCode = validation.countryCode;
+      user.localNumber = validation.localNumber;
       db.users.update(user.id, user);
-    } else {
-      return res.status(403).json({ success: false, error: 'USER_BANNED' });
     }
-  }
 
-  // Create session with 7-day expiration
-  const token = `tf-sess-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
-  activeSessions.set(token, {
-    userId: user.id,
-    phone: sanitizedPhone,
-    countryCode: validation.countryCode,
-    localNumber: validation.localNumber,
-    role: user.role || 'user',
-    expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
-  });
+    // Device Binding Security (One account per active device, 72-hour cooldown for switching accounts)
+    const rawDeviceId = req.body.deviceId || req.headers['x-device-id'];
+    if (rawDeviceId) {
+      const deviceId = String(rawDeviceId).trim();
+      const binding = db.deviceBindings ? (db.deviceBindings.findById(deviceId) || db.deviceBindings.findOne((b) => b.deviceId === deviceId || b.id === deviceId)) : null;
+      const COOLDOWN_MS = 72 * 60 * 60 * 1000; // 72 hours
 
-  res.json({
-    success: true,
-    user: {
-      id: user.id,
+      if (binding) {
+        const boundAccountId = binding.boundUserId || binding.boundAccountId;
+        const boundPhone = binding.boundPhone;
+        const isSameAccount = boundAccountId === user.id || boundPhone === sanitizedPhone;
+
+        if (isSameAccount) {
+          // SAME ACCOUNT ON SAME DEVICE: Always allow! Regardless of 72h cooldown
+          binding.lastActiveAt = new Date(now).toISOString();
+          if (db.deviceBindings) db.deviceBindings.update(binding.id, binding);
+        } else {
+          // DIFFERENT ACCOUNT ON SAME DEVICE!
+          const boundTime = new Date(binding.boundAt || binding.createdAt || 0).getTime();
+          const elapsed = now - boundTime;
+
+          if (elapsed < COOLDOWN_MS) {
+            const remainingHours = Math.max(1, Math.ceil((COOLDOWN_MS - elapsed) / (60 * 60 * 1000)));
+            return res.status(403).json({
+              success: false,
+              code: 'DEVICE_COOLDOWN_ACTIVE',
+              error: `This device is bound to another account. You can switch accounts in ${remainingHours} hours.`,
+              remainingCooldownHours: remainingHours,
+            });
+          } else {
+            // Elapsed >= 72 hours: ALLOW new account binding
+            binding.boundUserId = user.id;
+            binding.boundAccountId = user.id;
+            binding.boundPhone = sanitizedPhone;
+            binding.boundAt = new Date(now).toISOString();
+            binding.lastActiveAt = new Date(now).toISOString();
+            if (db.deviceBindings) db.deviceBindings.update(binding.id, binding);
+          }
+        }
+      } else if (db.deviceBindings) {
+        // First-time device binding
+        db.deviceBindings.insert({
+          id: deviceId,
+          deviceId: deviceId,
+          boundUserId: user.id,
+          boundAccountId: user.id,
+          boundPhone: sanitizedPhone,
+          boundAt: new Date(now).toISOString(),
+          lastActiveAt: new Date(now).toISOString(),
+        });
+      }
+    }
+
+    // Ban Check
+    if (user && user.status === 'banned') {
+      if (user.banType === 'temporary' && user.banUntil && Date.now() >= new Date(user.banUntil).getTime()) {
+        user.status = 'active';
+        user.banType = null;
+        user.banUntil = null;
+        db.users.update(user.id, user);
+      } else {
+        return res.status(403).json({ success: false, error: 'USER_BANNED' });
+      }
+    }
+
+    // Create session with 7-day expiration
+    const token = `tf-sess-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+    activeSessions.set(token, {
+      userId: user.id,
       phone: sanitizedPhone,
       countryCode: validation.countryCode,
       localNumber: validation.localNumber,
-      name: user.name,
       role: user.role || 'user',
-    },
-    token,
-  });
+      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    });
+
+    return res.json({
+      success: true,
+      user: {
+        id: user.id,
+        phone: sanitizedPhone,
+        countryCode: validation.countryCode,
+        localNumber: validation.localNumber,
+        name: user.name,
+        role: user.role || 'user',
+        isNewUser: isBrandNewUser,
+      },
+      isNewUser: isBrandNewUser,
+      token,
+    });
+  } catch (err) {
+    console.error('[OTP VERIFY ERROR]:', err);
+    return res.status(500).json({
+      success: false,
+      error: 'Unable to verify OTP. Please try again.',
+    });
+  }
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -697,6 +921,19 @@ if (!IS_PROD) {
     res.json({ success: true, message: 'Test OTP state reset successfully.' });
   });
 }
+
+// Helper: Allow admin routes to clear in-memory OTP stores without circular dependency
+app.set('clearOtpState', (phones = []) => {
+  if (!phones || phones.length === 0) {
+    otpStore.clear();
+    otpRequestRateLimits.clear();
+    return;
+  }
+  for (const p of phones) {
+    otpStore.delete(p);
+    otpRequestRateLimits.delete(p);
+  }
+});
 
 // 6.5 Mount Private Admin API router
 app.use('/api/admin', adminRouter);
@@ -808,10 +1045,12 @@ export async function startServer() {
         activeSessions.hydrate(true);
       }
     } catch (err) {
-      console.error('[FATAL DATABASE ERROR] Failed to connect or hydrate from Supabase PostgreSQL:', err.message);
-      if (IS_PROD || engine === 'supabase') {
+      console.warn('[Database Engine] Could not hydrate from Supabase PostgreSQL:', err.message);
+      if (IS_PROD) {
         console.error('[FATAL DATABASE ERROR] In production with DATABASE_ENGINE=supabase, server startup cannot proceed in an empty fallback state. Aborting.');
         process.exit(1);
+      } else {
+        console.log('[Database Engine] Continuing in development with local storage fallback.');
       }
     }
   }

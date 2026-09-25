@@ -7,8 +7,6 @@ import {
   Zap,
   CheckCircle2,
   XCircle,
-  Clock,
-  Briefcase,
   X,
   ExternalLink,
   Shield,
@@ -49,6 +47,16 @@ export default function AdminUsers() {
   useEffect(() => {
     fetchUsers();
   }, [planFilter, statusFilter]);
+
+  useEffect(() => {
+    const handleRefresh = () => fetchUsers();
+    window.addEventListener('tf_admin_reset_complete', handleRefresh);
+    window.addEventListener('tf_admin_users_deleted', handleRefresh);
+    return () => {
+      window.removeEventListener('tf_admin_reset_complete', handleRefresh);
+      window.removeEventListener('tf_admin_users_deleted', handleRefresh);
+    };
+  }, []);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();

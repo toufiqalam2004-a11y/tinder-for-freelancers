@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { 
   Settings as SettingsIcon, User, Briefcase, Sliders, Bell, 
-  Bot, Shield, Moon, Sun, Monitor, Globe, Database, 
+  Shield, Moon, Sun, Monitor, Globe, Database, 
   Download, Trash2, ChevronRight, Check, AlertTriangle, 
   Sparkles, ExternalLink, Info, CheckCircle2, RefreshCw, Crown, Lock 
 } from 'lucide-react';
@@ -28,9 +28,6 @@ import {
   exportUserData,
   clearUserHistory,
   deleteAccount,
-  getAutopilotSettings,
-  saveAutopilotSettings,
-  resetAutopilotSetup,
   getAutoDeletePreference,
   setAutoDeletePreference,
 } from '../data/storage.js';
@@ -44,7 +41,6 @@ const SECTIONS = [
   { id: 'account', label: 'Account & Workspaces', icon: User },
   { id: 'preferences', label: 'Match Preferences', icon: Sliders },
   { id: 'notifications', label: 'Notifications', icon: Bell },
-  { id: 'autopilot', label: 'Autopilot Preferences', icon: Bot },
   { id: 'sources', label: 'Source Health', icon: Globe },
   { id: 'data', label: 'Data & Privacy', icon: Database },
 ];
@@ -59,9 +55,7 @@ const Settings = () => {
   const [preferences, setPreferences] = useState(() => getUserPreferences());
   const [workspaces, setWorkspaces] = useState(() => getWorkspaces());
   const [sourceHealth, setSourceHealth] = useState(() => getSourceHealthList());
-  const [autopilotSettings, setAutopilotSettings] = useState(() => getAutopilotSettings());
   const [showAboutModal, setShowAboutModal] = useState(false);
-  const [showResetAutopilotModal, setShowResetAutopilotModal] = useState(false);
 
   const isPlusOrPro = subscriptionService.isPlus() || subscriptionService.isPro();
   const [autoDeleteEnabled, setAutoDeleteEnabled] = useState(() => {
@@ -82,40 +76,7 @@ const Settings = () => {
     toast.success(`Auto-delete ${val ? 'enabled (7 days)' : 'disabled'}.`);
   };
 
-  // Autopilot settings update handler
-  const handleUpdateAutopilotSetting = (key, value) => {
-    const updated = {
-      ...autopilotSettings,
-      [key]: value,
-      updatedAt: new Date().toISOString(),
-    };
-    setAutopilotSettings(updated);
-    saveAutopilotSettings(updated);
-    toast.success('Autopilot preferences updated');
-  };
 
-  const handleToggleAutopilotArray = (key, item) => {
-    const list = autopilotSettings[key] || [];
-    let updatedList;
-    if (list.includes(item)) {
-      if (list.length > 1) {
-        updatedList = list.filter((i) => i !== item);
-      } else {
-        toast.error('At least one option must remain selected.');
-        return;
-      }
-    } else {
-      updatedList = [...list, item];
-    }
-    handleUpdateAutopilotSetting(key, updatedList);
-  };
-
-  const handleConfirmResetAutopilot = () => {
-    const reset = resetAutopilotSetup();
-    setAutopilotSettings(reset);
-    setShowResetAutopilotModal(false);
-    toast.success('Autopilot setup reset. Wizard will run on your next Autopilot visit.');
-  };
 
   // Preference updates
   const handleUpdatePreference = (key, value) => {
@@ -492,249 +453,7 @@ const Settings = () => {
           </div>
         )}
 
-        {/* SECTION 5: AUTOPILOT PREFERENCES */}
-        {activeSection === 'autopilot' && (
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-sm font-bold text-text-primary">Autopilot Preferences</h3>
-              <p className="text-xs text-text-secondary">
-                Configure your target criteria, sources, outreach caps, and operating control mode.
-              </p>
-            </div>
 
-            {/* Operating Control Mode with Plan Gating */}
-            <Card className="p-4 border border-border bg-surface space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-bold text-text-primary">Operating Control Mode</h4>
-                  <p className="text-[11px] text-text-muted mt-0.5">Choose how autonomously the agent acts</p>
-                </div>
-                <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-                  {autopilotSettings.mode || 'manual'}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
-                {[
-                  {
-                    id: 'manual',
-                    label: 'Manual',
-                    desc: 'You manually draft and send each proposal (100% Free)',
-                  },
-                  {
-                    id: 'approval',
-                    label: 'Approval',
-                    desc: 'AI personalizes drafts; you review and approve before sending',
-                  },
-                  {
-                    id: 'autopilot',
-                    label: 'Autonomous',
-                    desc: 'Agent sends qualified opportunities automatically',
-                  },
-                ].map((mode) => {
-                  const check = subscriptionService.canUseAutopilot(mode.id);
-                  const isLocked = !check.allowed;
-                  const isSelected = autopilotSettings.mode === mode.id;
-
-                  return (
-                    <button
-                      key={mode.id}
-                      type="button"
-                      onClick={() => {
-                        if (isLocked) {
-                          toast.error(check.reason || 'Upgrade required for this mode');
-                          return;
-                        }
-                        handleUpdateAutopilotSetting('mode', mode.id);
-                      }}
-                      className={`p-2.5 rounded-xl border text-left transition-all relative ${
-                        isSelected
-                          ? 'border-primary bg-primary/5 shadow-sm'
-                          : isLocked
-                          ? 'border-border/60 bg-surface-hover/30 opacity-70'
-                          : 'border-border bg-surface hover:bg-surface-hover'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-bold text-text-primary capitalize flex items-center gap-1">
-                          {mode.label}
-                          {isLocked && <Lock size={10} className="text-amber-500" />}
-                        </span>
-                        {isSelected && (
-                          <div className="w-3.5 h-3.5 rounded-full bg-primary text-white flex items-center justify-center">
-                            <Check size={9} />
-                          </div>
-                        )}
-                      </div>
-                      <p className="text-[10px] text-text-muted leading-tight">{mode.desc}</p>
-                    </button>
-                  );
-                })}
-              </div>
-            </Card>
-
-            {/* Target Criteria & Minimum Match */}
-            <Card className="p-4 border border-border bg-surface space-y-4">
-              <h4 className="text-xs font-bold text-text-primary">Discovery & Match Precision</h4>
-
-              {/* Minimum Match Score */}
-              <div>
-                <div className="flex items-center justify-between mb-1 text-xs">
-                  <span className="font-semibold text-text-secondary">Minimum Match Score</span>
-                  <span className="font-bold text-primary">{autopilotSettings.minMatchScore || 80}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="60"
-                  max="90"
-                  step="5"
-                  value={autopilotSettings.minMatchScore || 80}
-                  onChange={(e) => handleUpdateAutopilotSetting('minMatchScore', Number(e.target.value))}
-                  className="w-full accent-primary"
-                />
-                <div className="flex justify-between text-[10px] text-text-muted mt-0.5">
-                  <span>60% (Broadest)</span>
-                  <span>80% (Recommended)</span>
-                  <span>90% (Strict)</span>
-                </div>
-              </div>
-
-              {/* Daily Send Limit */}
-              <div>
-                <div className="flex items-center justify-between mb-1 text-xs">
-                  <span className="font-semibold text-text-secondary">Daily Outreach Limit</span>
-                  <span className="font-bold text-primary">{autopilotSettings.dailyLimit || 5} proposals/day</span>
-                </div>
-                <input
-                  type="range"
-                  min="1"
-                  max="15"
-                  step="1"
-                  value={autopilotSettings.dailyLimit || 5}
-                  onChange={(e) => handleUpdateAutopilotSetting('dailyLimit', Number(e.target.value))}
-                  className="w-full accent-primary"
-                />
-                <div className="flex justify-between text-[10px] text-text-muted mt-0.5">
-                  <span>1 (Conservative)</span>
-                  <span>5 (Recommended)</span>
-                  <span>15 (Max Cap)</span>
-                </div>
-              </div>
-            </Card>
-
-            {/* Opportunity Types */}
-            <Card className="p-4 border border-border bg-surface space-y-3">
-              <h4 className="text-xs font-bold text-text-primary">Opportunity Categories</h4>
-              <p className="text-[11px] text-text-muted">Target client sectors to qualify</p>
-              <div className="flex flex-wrap gap-1.5">
-                {[
-                  'YouTube Channels & Creators',
-                  'Tech Startups & SaaS',
-                  'Creative Agencies & Studios',
-                  'E-commerce & DTC Brands',
-                  'Podcasters & Media Brands',
-                  'Founders & Solopreneurs',
-                ].map((cat) => {
-                  const isSelected = (autopilotSettings.opportunityTypes || []).includes(cat);
-                  return (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => handleToggleAutopilotArray('opportunityTypes', cat)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-all ${
-                        isSelected
-                          ? 'border-primary bg-primary text-white shadow-sm'
-                          : 'border-border bg-surface text-text-secondary hover:bg-surface-hover'
-                      }`}
-                    >
-                      {cat}
-                    </button>
-                  );
-                })}
-              </div>
-            </Card>
-
-            {/* Monitored Sources */}
-            <Card className="p-4 border border-border bg-surface space-y-3">
-              <h4 className="text-xs font-bold text-text-primary">Monitored Platform Sources</h4>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                {[
-                  { id: 'reddit', label: 'Reddit' },
-                  { id: 'youtube', label: 'YouTube' },
-                  { id: 'x', label: 'X / Twitter' },
-                  { id: 'facebook_group', label: 'Facebook Groups' },
-                ].map((src) => {
-                  const isChecked = (autopilotSettings.sources || []).includes(src.id);
-                  return (
-                    <button
-                      key={src.id}
-                      type="button"
-                      onClick={() => handleToggleAutopilotArray('sources', src.id)}
-                      className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition-all ${
-                        isChecked
-                          ? 'border-primary bg-primary/5 text-text-primary'
-                          : 'border-border bg-surface text-text-muted'
-                      }`}
-                    >
-                      <span className="font-semibold">{src.label}</span>
-                      {isChecked && <Check size={14} className="text-primary" />}
-                    </button>
-                  );
-                })}
-              </div>
-            </Card>
-
-            {/* Outreach Method & Follow-ups */}
-            <Card className="p-4 border border-border bg-surface space-y-3">
-              <h4 className="text-xs font-bold text-text-primary">Outreach & Follow-up Rules</h4>
-              <div className="flex items-center justify-between py-1 border-b border-border/60 text-xs">
-                <div>
-                  <div className="font-semibold text-text-primary">Polite Follow-ups</div>
-                  <div className="text-[11px] text-text-muted">Auto-queue follow-ups on Days 3 & 7</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleUpdateAutopilotSetting('enableFollowUps', !autopilotSettings.enableFollowUps)}
-                  className={`w-10 h-5 rounded-full transition-colors relative ${
-                    autopilotSettings.enableFollowUps !== false ? 'bg-primary' : 'bg-border'
-                  }`}
-                >
-                  <div
-                    className={`w-3.5 h-3.5 rounded-full bg-white absolute top-0.5 transition-transform ${
-                      autopilotSettings.enableFollowUps !== false ? 'right-0.5' : 'left-0.5'
-                    }`}
-                  />
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between py-1 text-xs">
-                <div>
-                  <div className="font-semibold text-text-primary">Duplicate Contact Cooldown</div>
-                  <div className="text-[11px] text-text-muted">Mandatory cooldown to prevent spamming leads</div>
-                </div>
-                <span className="font-bold text-emerald-600 dark:text-emerald-400">3 Days</span>
-              </div>
-            </Card>
-
-            {/* Advanced Action: Reset Autopilot Setup */}
-            <Card className="p-4 border border-border bg-surface text-xs space-y-2">
-              <div className="font-bold text-text-primary">Advanced: Re-run Initial Setup</div>
-              <p className="text-[11px] text-text-muted">
-                Need to re-run the 7-step guided onboarding wizard from scratch? Resetting will re-enable the initial setup wizard on your next Autopilot visit.
-              </p>
-              <div className="pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowResetAutopilotModal(true)}
-                  className="px-3 py-1.5 rounded-xl border border-border bg-surface text-text-secondary hover:text-text-primary hover:bg-surface-hover font-semibold transition-colors flex items-center gap-1.5"
-                >
-                  <RefreshCw size={13} />
-                  <span>Reset Autopilot Setup</span>
-                </button>
-              </div>
-            </Card>
-          </div>
-        )}
 
         {/* SECTION 6: SOURCE HEALTH & BACKEND STATUS */}
         {activeSection === 'sources' && (
@@ -821,7 +540,7 @@ const Settings = () => {
               <div>
                 <div className="font-bold text-text-primary mb-1">Export Data Backup</div>
                 <p className="text-text-muted mb-2 text-[11px]">
-                  Download your entire profile, saved jobs, CRM applications, and autopilot leads in JSON format.
+                  Download your entire profile, saved jobs, and CRM applications in JSON format.
                 </p>
                 <Button variant="secondary" size="sm" onClick={handleExportData} icon={<Download size={14} />}>
                   Export Data (JSON)
@@ -907,45 +626,6 @@ const Settings = () => {
 
         {/* About Modal */}
         <AboutModal isOpen={showAboutModal} onClose={() => setShowAboutModal(false)} />
-
-        {/* Reset Autopilot Setup Confirmation Modal */}
-        <Modal
-          isOpen={showResetAutopilotModal}
-          onClose={() => setShowResetAutopilotModal(false)}
-          title="Reset Autopilot Setup"
-        >
-          <div className="space-y-4 pt-1">
-            <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-start gap-3">
-              <AlertTriangle className="text-amber-500 flex-shrink-0 mt-0.5" size={18} />
-              <div className="text-xs">
-                <span className="font-bold text-text-primary block mb-0.5">
-                  Reset Autopilot setup and run the initial setup again?
-                </span>
-                <p className="text-text-muted leading-relaxed">
-                  This will mark your setup as incomplete. When you next open the Autopilot page, the 7-step guided onboarding wizard will run again.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowResetAutopilotModal(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={handleConfirmResetAutopilot}
-                icon={<RefreshCw size={14} />}
-              >
-                Reset Setup
-              </Button>
-            </div>
-          </div>
-        </Modal>
       </div>
     </PageTransition>
   );

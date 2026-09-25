@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, Link2, FileText, User } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 import Modal from './Modal';
 import Input from './Input';
 import Button from './Button';

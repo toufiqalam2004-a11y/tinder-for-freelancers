@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, Check, Trash2, ExternalLink, Sparkles, AlertCircle, Bookmark } from 'lucide-react';
+import { Bell, Check, Trash2, Sparkles, Bookmark } from 'lucide-react';
 import Modal from './Modal';
 import Button from './Button';
 import {

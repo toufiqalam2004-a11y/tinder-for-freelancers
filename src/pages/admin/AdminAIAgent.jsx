@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bot, CheckCircle2, AlertCircle, RefreshCw, Globe, Sparkles, Filter, ShieldAlert } from 'lucide-react';
+import { Bot, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
 import { useAdmin } from './AdminContext';
 
 export default function AdminAIAgent() {

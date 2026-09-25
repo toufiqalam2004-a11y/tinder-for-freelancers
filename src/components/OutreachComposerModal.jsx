@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  X, Copy, Send, Mail, MessageCircle, Sparkles, Check, 
-  ExternalLink, Building2, User, RefreshCw, AlertCircle 
+  X, Copy, Send, Mail, MessageCircle, Sparkles, 
+  RefreshCw, AlertCircle 
 } from 'lucide-react';
 import Button from './Button';
 import { aiProvider } from '../services/aiProvider';

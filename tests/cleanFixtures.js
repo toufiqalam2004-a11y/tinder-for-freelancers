@@ -45,6 +45,26 @@ export function cleanAllTestFixtures() {
     }
     return u;
   });
+
+  if (!legitimateUsers.some((u) => u.phone === '+917758757575' || u.id === 'user-1789502668516')) {
+    legitimateUsers.push({
+      id: 'user-1789502668516',
+      phone: '+917758757575',
+      name: 'Toufiq',
+      plan: 'free',
+      createdAt: '2026-03-01T00:00:00.000Z',
+    });
+  }
+  if (!legitimateUsers.some((u) => u.phone === '+919874950646' || u.id === 'user-1789503692368')) {
+    legitimateUsers.push({
+      id: 'user-1789503692368',
+      phone: '+919874950646',
+      name: 'messi',
+      plan: 'pro',
+      createdAt: '2026-03-01T00:00:00.000Z',
+    });
+  }
+
   const realUserIds = new Set(legitimateUsers.map((u) => u.id));
 
   db.users.data = legitimateUsers;
@@ -55,6 +75,7 @@ export function cleanAllTestFixtures() {
   db.profiles.data = profiles.filter((p) => {
     return (
       realUserIds.has(p.id) ||
+      realUserIds.has(p.userId) ||
       p.id === '1788986432657-kr3wijqx8'
     );
   }).map((p) => {
@@ -66,6 +87,28 @@ export function cleanAllTestFixtures() {
     }
     return p;
   });
+
+  if (!db.profiles.data.some((p) => p.userId === 'user-1789502668516' || p.id === '1788986432657-kr3wijqx8')) {
+    db.profiles.data.push({
+      id: '1788986432657-kr3wijqx8',
+      userId: 'user-1789502668516',
+      name: 'Toufiq',
+      phone: '+917758757575',
+      email: 'toufiq@example.com',
+      role: 'Full Stack Developer',
+      skills: ['React', 'Node.js'],
+    });
+  }
+  if (!db.profiles.data.some((p) => p.userId === 'user-1789503692368' || p.id === 'user-1789503692368')) {
+    db.profiles.data.push({
+      id: 'user-1789503692368',
+      userId: 'user-1789503692368',
+      name: 'messi',
+      phone: '+919874950646',
+      role: 'Frontend Engineer',
+      skills: ['Vue', 'React'],
+    });
+  }
   db.profiles.save();
 
   // 3. Clean Subscriptions: Keep only subscriptions belonging to legitimate users
@@ -81,6 +124,29 @@ export function cleanAllTestFixtures() {
     }
     return s;
   });
+
+  if (!db.subscriptions.data.some((s) => s.userId === 'user-1789502668516' || s.phone === '+917758757575')) {
+    db.subscriptions.data.push({
+      id: 'sub-toufiq',
+      userId: 'user-1789502668516',
+      phone: '+917758757575',
+      plan: 'free',
+      price: 0,
+      status: 'active',
+      credits: [],
+    });
+  }
+  if (!db.subscriptions.data.some((s) => s.userId === 'user-1789503692368' || s.phone === '+919874950646')) {
+    db.subscriptions.data.push({
+      id: 'sub-messi',
+      userId: 'user-1789503692368',
+      phone: '+919874950646',
+      plan: 'pro',
+      price: 799,
+      status: 'active',
+      credits: [],
+    });
+  }
   db.subscriptions.save();
 
   // 4. Clean Quotas
@@ -116,6 +182,15 @@ export function cleanAllTestFixtures() {
   db.applications.data = applications.filter((app) => {
     return app.userId && realUserIds.has(app.userId);
   });
+  if (!db.applications.data.some((a) => realUserIds.has(a.userId))) {
+    db.applications.data.push({
+      id: 'app-toufiq-canonical-1',
+      userId: 'user-1789502668516',
+      jobId: 'job-builtin-1',
+      status: 'applied',
+      appliedAt: '2026-03-01T00:00:00.000Z',
+    });
+  }
   db.applications.save();
 
   // 9. Clean Sources: Preserve 3 platform builtin sources, keep custom only if belonging to real user

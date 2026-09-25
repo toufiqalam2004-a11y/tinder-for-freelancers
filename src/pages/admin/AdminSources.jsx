@@ -7,7 +7,6 @@ import {
   ShieldCheck,
   User,
   RefreshCw,
-  Clock,
   Layers,
   Phone,
 } from 'lucide-react';

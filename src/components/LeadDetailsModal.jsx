@@ -1,8 +1,8 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  X, CheckCircle, AlertTriangle, Sparkles, ExternalLink, 
-  Mail, MessageCircle, Building2, User, Globe, Shield, Calendar, Send 
+  X, CheckCircle, Sparkles, ExternalLink, 
+  Mail, MessageCircle, Building2, Shield, Calendar, Send 
 } from 'lucide-react';
 import Button from './Button';
 

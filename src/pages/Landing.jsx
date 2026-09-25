@@ -296,8 +296,8 @@ const FAQ_ITEMS = [
     a: 'To maintain client trust and prevent spamming, applications operate on an 8-hour rolling quota. Free users receive 5 applications every 8 hours (up to 15/day). Plus members get 15 applications every 8 hours (45/day), and Pro members enjoy 25 applications every 8 hours (75/day). Quotas replenish automatically.',
   },
   {
-    q: 'What is Autopilot Mode and is it safe to use?',
-    a: 'Autopilot Mode is an exclusive feature for Pro members. It continuously scans your monitored sources and can automatically qualify opportunities and generate customized proposals matching your profile. You can configure safety settings, including manual approval before sending or setting conservative daily outreach limits.',
+    q: 'How does AI opportunity qualification and matching work?',
+    a: 'Our AI continuously indexes verified opportunities across top remote freelance channels, evaluates your skills and preferences against job requirements, and generates a personalized fit score so you only review high-probability leads.',
   },
   {
     q: 'Do I need a credit card to get started?',
@@ -1157,10 +1157,10 @@ export default function Landing() {
                 badge: 'Organized Flow',
               },
               {
-                title: 'Autopilot Mode (Pro)',
-                desc: 'Autonomous background scanning, smart opportunity filtering, and automated pitch submissions with custom limits and review controls.',
-                icon: Bot,
-                badge: 'Hands-Free',
+                title: 'AI Opportunity Matching (Pro)',
+                desc: 'Continuous background discovery, intelligent fit scoring, and tailored proposal drafts ready for your review and manual decision.',
+                icon: Zap,
+                badge: 'Smart Discovery',
               },
             ].map((feature, i) => {
               const IconComponent = feature.icon;
@@ -1686,9 +1686,9 @@ export default function Landing() {
                     <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
                     <span>Standard pipeline tracking</span>
                   </div>
-                  <div className="flex items-center gap-2.5 text-neutral-500">
-                    <X className="w-4 h-4 flex-shrink-0" />
-                    <span>No Autopilot access</span>
+                  <div className="flex items-center gap-2.5 text-neutral-400">
+                    <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                    <span>Manual review & 1-click apply</span>
                   </div>
                 </div>
               </div>
@@ -1753,9 +1753,9 @@ export default function Landing() {
                     <Check className="w-4 h-4 text-rose-400 flex-shrink-0" />
                     <span>Direct client contact details</span>
                   </div>
-                  <div className="flex items-center gap-2.5 text-neutral-500">
-                    <X className="w-4 h-4 flex-shrink-0" />
-                    <span>Autopilot Mode not included</span>
+                  <div className="flex items-center gap-2.5 text-neutral-400">
+                    <Check className="w-4 h-4 text-rose-400 flex-shrink-0" />
+                    <span>Full control over proposal sending</span>
                   </div>
                 </div>
               </div>
@@ -1774,10 +1774,10 @@ export default function Landing() {
                 <div className="mb-4 flex items-center justify-between">
                   <h3 className="text-xl font-bold text-white mb-1">Pro</h3>
                   <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300">
-                    🚀 Autopilot
+                    {/* 🚀 Autopilot */}MAX PIPELINE
                   </span>
                 </div>
-                <p className="text-xs text-neutral-400 mb-4">Full autonomy for top-tier freelancers & agencies.</p>
+                <p className="text-xs text-neutral-400 mb-4">High-volume pipeline and priority discovery for top-tier freelancers.</p>
                 <div className="flex items-baseline gap-1 mb-6">
                   <AnimatePresence mode="wait">
                     <motion.span
@@ -1808,12 +1808,12 @@ export default function Landing() {
                     <span>5 custom monitoring sources</span>
                   </div>
                   <div className="flex items-center gap-2.5 font-bold text-amber-300">
-                    <Bot className="w-4 h-4 text-amber-400 flex-shrink-0" />
-                    <span>Autopilot Autonomous Outreach</span>
+                    <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                    <span>Instant AI Match Scoring & Drafts</span>
                   </div>
                   <div className="flex items-center gap-2.5">
                     <Check className="w-4 h-4 text-amber-400 flex-shrink-0" />
-                    <span>Safety approvals & custom limits</span>
+                    <span>Custom search alerts & limits</span>
                   </div>
                   <div className="flex items-center gap-2.5">
                     <Check className="w-4 h-4 text-amber-400 flex-shrink-0" />
@@ -1830,7 +1830,7 @@ export default function Landing() {
                 onClick={handleGoToApp}
                 className="w-full py-3.5 rounded-xl text-xs font-bold text-neutral-200 bg-neutral-800 hover:bg-neutral-700 hover:text-white hover:-translate-y-0.5 active:translate-y-0.5 active:scale-95 transition-all shadow-md"
               >
-                Unlock Pro & Autopilot
+                Unlock Pro Membership
               </button>
             </div>
           </div>

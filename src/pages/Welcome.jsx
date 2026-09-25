@@ -2,8 +2,8 @@ import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  Sparkles, Phone, ChevronDown, ArrowRight, CheckCircle2, 
-  HelpCircle, X, Shield, Flame, Send, Award, Check, Search 
+  Sparkles, Phone, ChevronDown, ArrowRight, 
+  HelpCircle, X, Search 
 } from 'lucide-react';
 import Button from '../components/Button';
 import { useAuth } from '../contexts/AuthContext';

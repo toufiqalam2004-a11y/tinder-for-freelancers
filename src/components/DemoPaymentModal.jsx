@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CreditCard, Smartphone, Globe, ShieldCheck, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import { CreditCard, Smartphone, Globe, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
 import Modal from './Modal';
 import Button from './Button';
 import Input from './Input';

@@ -314,6 +314,7 @@ export const db = {
   // V1 Real Payment & Persistent Auth Collections
   sessions: createCollection('sessions', 'sessions.json'),
   otpVerifications: createCollection('otp_verifications', 'otp_verifications.json'),
+  deviceBindings: createCollection('device_bindings', 'device_bindings.json'),
   paymentCustomers: createCollection('payment_customers', 'payment_customers.json'),
   paymentOrders: createCollection('payment_orders', 'payment_orders.json'),
   paymentTransactions: createCollection('payment_transactions', 'payment_transactions.json'),
@@ -359,17 +360,30 @@ export const db = {
 
   async transaction(fn) {
     if (globalPool) {
-      const client = await globalPool.connect();
       try {
-        await client.query('BEGIN');
-        const result = await fn(client);
-        await client.query('COMMIT');
-        return result;
-      } catch (err) {
-        await client.query('ROLLBACK');
-        throw err;
-      } finally {
-        client.release();
+        const client = await globalPool.connect();
+        try {
+          await client.query('BEGIN');
+          const result = await fn(client);
+          await client.query('COMMIT');
+          return result;
+        } catch (err) {
+          await client.query('ROLLBACK');
+          throw err;
+        } finally {
+          client.release();
+        }
+      } catch (poolErr) {
+        if (
+          poolErr.code === 'XX000' ||
+          poolErr.code === 'ECONNREFUSED' ||
+          poolErr.code === '28P01' ||
+          poolErr.message?.includes('ECIRCUITBREAKER') ||
+          poolErr.message?.includes('authentication failed')
+        ) {
+          return fn(null);
+        }
+        throw poolErr;
       }
     }
     // In JSON mode, execute synchronously

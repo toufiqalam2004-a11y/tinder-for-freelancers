@@ -40,6 +40,13 @@ export default function AdminOverview({ onNavigateTab }) {
 
   useEffect(() => {
     fetchStats();
+    const handleRefresh = () => fetchStats();
+    window.addEventListener('tf_admin_reset_complete', handleRefresh);
+    window.addEventListener('tf_admin_users_deleted', handleRefresh);
+    return () => {
+      window.removeEventListener('tf_admin_reset_complete', handleRefresh);
+      window.removeEventListener('tf_admin_users_deleted', handleRefresh);
+    };
   }, []);
 
   const metricCards = [

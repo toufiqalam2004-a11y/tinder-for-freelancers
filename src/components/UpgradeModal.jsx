@@ -64,10 +64,10 @@ export default function UpgradeModal({
           <div className="p-3.5 rounded-xl bg-surface-hover border border-border text-left space-y-2">
             <div className="flex items-center gap-2 text-xs font-semibold text-text-primary">
               <Zap size={14} className="text-primary" />
-              <span>Plus Plan — ₹299/mo ($4.99)</span>
+              <span>Plus Plan — ₹499/mo ($7)</span>
             </div>
             <p className="text-[11px] text-text-muted">
-              • 20 applications/day • 5 sources • 10 AI Applies • Autopilot
+              • 15 applications/8hr • 3 custom sources • AI Pitch Generator
             </p>
 
             <div className="pt-2 border-t border-border flex items-center gap-2 text-xs font-semibold text-text-primary">

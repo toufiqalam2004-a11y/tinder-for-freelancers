@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
   ChevronLeft, ExternalLink, MapPin, DollarSign, Bookmark, BookmarkCheck, 
-  Clock, Building2, Briefcase, Globe, Send, Facebook, User 
+  Clock, Building2, Briefcase, Globe, Send, Facebook 
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -190,43 +190,21 @@ const JobDetails = () => {
 
         {/* Info Rows */}
         <div className="space-y-4 mb-6 bg-surface p-4 rounded-xl border border-border">
-          <div className="flex items-start">
-            <DollarSign size={18} className="text-text-muted mr-3 mt-0.5" />
-            <div>
-              <p className="text-xs text-text-muted">Salary</p>
-              <p className="text-sm text-text-primary font-medium">{job.salary || 'Not specified'}</p>
+          {[
+            { icon: DollarSign, label: 'Salary', value: job.salary || 'Not specified' },
+            { icon: MapPin, label: 'Location', value: job.location || 'Not specified' },
+            { icon: Briefcase, label: 'Experience', value: job.experience || 'Not specified' },
+            { icon: Globe, label: 'Contact Method', value: job.contactMethod || 'Not specified' },
+            { icon: Clock, label: 'Posted', value: new Date(job.postedAt || Date.now()).toLocaleDateString() },
+          ].map(({ icon: Icon, label, value }) => (
+            <div key={label} className="flex items-start">
+              <Icon size={18} className="text-text-muted mr-3 mt-0.5" />
+              <div>
+                <p className="text-xs text-text-muted">{label}</p>
+                <p className="text-sm text-text-primary font-medium">{value}</p>
+              </div>
             </div>
-          </div>
-          <div className="flex items-start">
-            <MapPin size={18} className="text-text-muted mr-3 mt-0.5" />
-            <div>
-              <p className="text-xs text-text-muted">Location</p>
-              <p className="text-sm text-text-primary font-medium">{job.location || 'Not specified'}</p>
-            </div>
-          </div>
-          <div className="flex items-start">
-            <Briefcase size={18} className="text-text-muted mr-3 mt-0.5" />
-            <div>
-              <p className="text-xs text-text-muted">Experience</p>
-              <p className="text-sm text-text-primary font-medium">{job.experience || 'Not specified'}</p>
-            </div>
-          </div>
-          <div className="flex items-start">
-            <Globe size={18} className="text-text-muted mr-3 mt-0.5" />
-            <div>
-              <p className="text-xs text-text-muted">Contact Method</p>
-              <p className="text-sm text-text-primary font-medium">{job.contactMethod || 'Not specified'}</p>
-            </div>
-          </div>
-          <div className="flex items-start">
-            <Clock size={18} className="text-text-muted mr-3 mt-0.5" />
-            <div>
-              <p className="text-xs text-text-muted">Posted</p>
-              <p className="text-sm text-text-primary font-medium">
-                {new Date(job.postedAt || Date.now()).toLocaleDateString()}
-              </p>
-            </div>
-          </div>
+          ))}
         </div>
 
         {/* Bottom Actions Bar */}

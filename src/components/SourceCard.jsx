@@ -9,9 +9,6 @@ import {
   Trash2,
   RefreshCw,
   Power,
-  Sparkles,
-  ExternalLink,
-  Lock,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Card from './Card';

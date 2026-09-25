@@ -1,9 +1,8 @@
-import { BasePlatformMonitor } from './baseMonitor';
 import { isValidFacebookGroupUrl } from '../../utils/validators';
 
-export class FacebookMonitor extends BasePlatformMonitor {
+export class FacebookMonitor {
   constructor() {
-    super('facebook_group');
+    this.platform = 'facebook_group';
   }
 
   /**

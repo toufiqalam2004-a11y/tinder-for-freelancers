@@ -13,20 +13,13 @@ import {
   FREE_APPLICATION_QUOTA,
   PLUS_APPLICATION_QUOTA,
   PRO_APPLICATION_QUOTA,
-  PLAN_QUOTA_CONFIG,
   getPlanQuotaConfig,
   getApplicationsPerWindow,
-  getQuotaWindowHours,
   formatWindowCountdown,
 } from '../../src/utils/quotaConfig.js';
 import { demoAdapter } from '../../src/services/outreach/demoAdapter.js';
 import { generateReferralCode, normalizeReferralCode, isValidReferralCode } from '../../src/utils/referralUtils.js';
-import {
-  FREE_CUSTOM_SOURCE_LIMIT,
-  PLUS_CUSTOM_SOURCE_LIMIT,
-  PRO_CUSTOM_SOURCE_LIMIT,
-  getCustomSourceLimit,
-} from '../../src/utils/sourceConfig.js';
+import { getCustomSourceLimit } from '../../src/utils/sourceConfig.js';
 import { generateUniqueDisplayName, getAvailableUsernameSuggestions } from '../../src/utils/nameUtils.js';
 
 export function isDemoOutreachEnabled(req) {
@@ -1175,7 +1168,8 @@ router.post('/credits/demo-buy', (req, res) => {
     isDemo: true,
   };
 
-  sub.credits = [...(sub.credits || []), newCredit];
+  const existingCredits = Array.isArray(sub.credits) ? sub.credits : [];
+  sub.credits = [...existingCredits, newCredit];
   sub.updatedAt = new Date().toISOString();
   db.subscriptions.insert(sub);
 
@@ -1194,7 +1188,8 @@ router.post('/credits/demo-buy', (req, res) => {
     });
   }
 
-  res.json({ success: true, credit: newCredit, totalCredits: sub.credits.reduce((acc, c) => acc + c.remaining, 0) });
+  const totalCredits = sub.credits.reduce((acc, c) => acc + (typeof c === 'number' ? c : (c?.remaining ?? c?.amount ?? 0)), 0);
+  res.json({ success: true, credit: newCredit, totalCredits });
 });
 
 // ==========================================

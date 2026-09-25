@@ -113,6 +113,7 @@ function AppContent() {
 
             {/* 3. User Authentication & Onboarding */}
             <Route path="/login" element={<Login />} />
+            <Route path="/signup" element={<Login initialMode="signup" />} />
             <Route path="/welcome" element={<Welcome />} />
             <Route path="/verify-otp" element={<OTPVerification />} />
             <Route path="/profile-setup" element={isAuthenticated ? <ProfileSetup /> : <Navigate to="/login" replace />} />

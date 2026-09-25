@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { 
   Search, X, Briefcase, Building2, FileText, Globe, 
-  ArrowRight, Sparkles, Filter, ExternalLink, Bot 
+  ArrowRight, Sparkles, Filter 
 } from 'lucide-react';
 import { searchService } from '../services/searchService';
 

@@ -12,6 +12,7 @@ import {
   getQuotaWindowHours,
   formatWindowCountdown,
 } from './quotaConfig.js';
+
 import {
   FREE_CUSTOM_SOURCE_LIMIT,
   PLUS_CUSTOM_SOURCE_LIMIT,
@@ -415,7 +416,7 @@ export const SUBSCRIPTION_PLANS = {
       'Advanced match scoring',
       '10 Saved search alerts',
       'All 6 Curated theme presets',
-      'Autopilot (Approval Mode)',
+      'AI Proposal Writer',
       'Smart follow-up reminders',
       'Advanced funnel analytics',
     ],
@@ -423,8 +424,8 @@ export const SUBSCRIPTION_PLANS = {
   PRO: {
     id: 'pro',
     name: 'Pro',
-    badge: '🚀 Autopilot',
-    tagline: 'Autonomous career pipeline & VIP perks',
+    badge: '🚀 Pro',
+    tagline: 'High-volume career pipeline & VIP perks',
     prices: {
       monthly: {
         INR: 1499,
@@ -461,7 +462,7 @@ export const SUBSCRIPTION_PLANS = {
       'Priority + Top-Tier Match Score',
       'Unlimited Saved search alerts',
       'Custom Color Theme Builder',
-      'Full Autonomous Autopilot',
+      'Instant AI Match Fit & Tailored Pitches',
       'AI Instant replies & lead finding',
       'VIP Priority job pipeline & analytics',
     ],
