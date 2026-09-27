@@ -113,6 +113,136 @@ export class DeduplicationService {
 
     return { uniqueJobs, duplicateCount };
   }
+
+  /**
+   * Safely canonicalizes a URL by stripping tracking parameters, fragments, and trailing slashes.
+   */
+  canonicalizeUrl(urlStr = '') {
+    if (!urlStr || typeof urlStr !== 'string') return '';
+    try {
+      const parsed = new URL(urlStr.trim());
+      parsed.hostname = parsed.hostname.toLowerCase();
+      parsed.hash = ''; // Remove fragment
+
+      // Safely strip standard tracking parameters without changing destination
+      const trackingParams = [
+        'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+        'ref', 'reference', 'fbclid', 'gclid', 'msclkid', 'source', 'trk',
+      ];
+      trackingParams.forEach((param) => parsed.searchParams.delete(param));
+
+      let result = parsed.toString();
+      // Remove trailing slash if path is more than just '/'
+      if (parsed.pathname.length > 1 && result.endsWith('/')) {
+        result = result.slice(0, -1);
+      }
+      return result;
+    } catch {
+      return urlStr.trim().replace(/#.*$/, '').replace(/\/+$/, '');
+    }
+  }
+
+  /**
+   * Generates a stable deduplication key using the strongest available identifier:
+   * 1. External job ID (id / postId / externalId)
+   * 2. Canonical application URL
+   * 3. Canonical source URL
+   * 4. Carefully normalized company + title
+   */
+  generateDedupeKey(opportunity = {}) {
+    // 1. External Job ID
+    if (opportunity.id || opportunity.postId || opportunity.externalId) {
+      const rawId = String(opportunity.id || opportunity.postId || opportunity.externalId).trim();
+      if (rawId && rawId !== 'undefined' && rawId !== 'null') {
+        return `id:${rawId}`;
+      }
+    }
+
+    // 2. Canonical Application URL
+    const appUrl = this.canonicalizeUrl(opportunity.applicationUrl);
+    if (appUrl) {
+      return `app_url:${appUrl}`;
+    }
+
+    // 3. Canonical Source URL
+    const srcUrl = this.canonicalizeUrl(opportunity.sourceUrl || opportunity.postUrl);
+    if (srcUrl) {
+      return `src_url:${srcUrl}`;
+    }
+
+    // 4. Normalized Company + Title
+    const normTitle = normalizeString(opportunity.title);
+    const normCompany = normalizeString(opportunity.company || opportunity.author || 'unknown');
+    return `entity:${normCompany}::${normTitle}`;
+  }
+
+  /**
+   * Collapses duplicate opportunities from multi-query discovery batches.
+   * Merges sources and discovered queries while preserving primary origin and original URLs.
+   */
+  deduplicateOpportunities(opportunities = []) {
+    const keyMap = new Map();
+    const duplicatePairs = [];
+    let duplicateCount = 0;
+
+    for (const opp of opportunities) {
+      const dedupeKey = this.generateDedupeKey(opp);
+      const oppSource = opp.source || 'Unknown';
+      const oppQuery = opp.query || null;
+
+      if (keyMap.has(dedupeKey)) {
+        duplicateCount++;
+        const existing = keyMap.get(dedupeKey);
+
+        // Record duplicate pair info for quality verification
+        duplicatePairs.push({
+          duplicateTitle: opp.title,
+          duplicateCompany: opp.company,
+          primaryTitle: existing.title,
+          primaryCompany: existing.company,
+          dedupeKey,
+          sources: [existing.source, oppSource],
+        });
+
+        // Merge sources without duplicates
+        if (!existing.sources.includes(oppSource)) {
+          existing.sources.push(oppSource);
+        }
+
+        // Merge discoveredQueries
+        if (oppQuery && !existing.discoveredQueries.includes(oppQuery)) {
+          existing.discoveredQueries.push(oppQuery);
+        }
+
+        // Fill missing applicationUrl if duplicate has one
+        if (!existing.applicationUrl && opp.applicationUrl) {
+          existing.applicationUrl = opp.applicationUrl;
+        }
+      } else {
+        const canonicalRecord = {
+          ...opp,
+          dedupeKey,
+          primarySource: oppSource,
+          sources: [oppSource],
+          discoveredQueries: oppQuery ? [oppQuery] : [],
+          canonicalSourceUrl: this.canonicalizeUrl(opp.sourceUrl || opp.postUrl),
+          canonicalApplicationUrl: this.canonicalizeUrl(opp.applicationUrl),
+        };
+        keyMap.set(dedupeKey, canonicalRecord);
+      }
+    }
+
+    const uniqueOpportunities = Array.from(keyMap.values());
+    return {
+      uniqueOpportunities,
+      duplicateCount,
+      duplicatePairs,
+    };
+  }
 }
 
 export const deduplicationService = new DeduplicationService();
+export const canonicalizeUrl = (url) => deduplicationService.canonicalizeUrl(url);
+export const generateDedupeKey = (opp) => deduplicationService.generateDedupeKey(opp);
+export const deduplicateOpportunities = (opps) => deduplicationService.deduplicateOpportunities(opps);
+

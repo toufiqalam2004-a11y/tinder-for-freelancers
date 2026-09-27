@@ -1,0 +1,159 @@
+{
+  "name": "V1 AI Agent Discovery & Qualification Pipeline",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "e4b3c9a1-8d2e-4f1a-b678-1a2b3c4d5e01",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "pipelineVersion",
+              "value": "v1.0.0"
+            }
+          ],
+          "number": [
+            {
+              "name": "limitPerQuery",
+              "value": 5
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+      "name": "Set Discovery Parameters",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5000/api/agent/discover",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"queries\": [\n    \"Video Editor jobs\",\n    \"Short-form Video Editor jobs\",\n    \"Reels Editor jobs\",\n    \"YouTube Shorts Video Editor jobs\",\n    \"Motion Graphics Video Editor jobs\",\n    \"AI Video Editor jobs\"\n  ],\n  \"limitPerQuery\": {{ $json.limitPerQuery || 5 }}\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e",
+      "name": "Trigger Local Discovery",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f",
+      "name": "Validate Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format and structure discovered results for clean n8n inspection\nconst data = $input.first().json;\n\nreturn [{\n  json: {\n    status: 'SUCCESS',\n    runId: data.runId,\n    timestamp: data.timestamp,\n    summary: {\n      queriesExecuted: data.summary?.queries || 6,\n      rawDiscovered: data.summary?.rawDiscovered || 0,\n      uniqueOpportunities: data.summary?.uniqueOpportunities || 0,\n      qualifiedCount: data.summary?.qualified || 0,\n      rejectedCount: data.summary?.rejected || 0,\n    },\n    qualifiedOpportunities: (data.qualified || []).map((q) => ({\n      title: q.opportunity?.title,\n      company: q.opportunity?.company,\n      matchScore: q.matchScore,\n      reason: q.reason,\n      source: q.opportunity?.primarySource || q.opportunity?.source,\n      sourceUrl: q.opportunity?.sourceUrl,\n      applicationUrl: q.opportunity?.applicationUrl,\n      remote: q.opportunity?.remote,\n      matchedSkills: q.matchedSkills,\n    })),\n    rejectionSample: (data.rejected || []).slice(0, 5).map((r) => ({\n      title: r.opportunity?.title,\n      company: r.opportunity?.company,\n      reason: r.reason,\n    })),\n  }\n}];"
+      },
+      "id": "d4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f8a",
+      "name": "Format Discovered Opportunities",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format discovery failure details cleanly for n8n execution viewer\nconst data = $input.first().json;\n\nreturn [{\n  json: {\n    status: 'FAILED',\n    errorCode: data.error?.code || 'DISCOVERY_ERROR',\n    errorMessage: data.error?.message || 'Unknown discovery error occurred',\n    timestamp: new Date().toISOString(),\n  }\n}];"
+      },
+      "id": "e5f6a7b8-c9d0-4e1f-2a3b-4c5d6e7f8a9b",
+      "name": "Handle Discovery Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 420]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Discovery Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Discovery Parameters": {
+      "main": [
+        [
+          {
+            "node": "Trigger Local Discovery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Local Discovery": {
+      "main": [
+        [
+          {
+            "node": "Validate Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Success": {
+      "main": [
+        [
+          {
+            "node": "Format Discovered Opportunities",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Discovery Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "f1a2b3c4-d5e6-4a7b-8c9d-0e1f2a3b4c5d",
+  "id": "v1-discovery-pipeline",
+  "meta": {
+    "instanceId": "tinder-freelancer-v1-local"
+  },
+  "tags": [
+    {
+      "name": "V1 AI Agent",
+      "id": "tag-v1-agent"
+    }
+  ]
+}

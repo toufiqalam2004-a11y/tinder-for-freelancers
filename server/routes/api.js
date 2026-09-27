@@ -4,6 +4,7 @@ import { redditService } from '../services/redditService.js';
 import { youtubeService } from '../services/youtubeService.js';
 import { xService } from '../services/xService.js';
 import { aiService } from '../services/aiService.js';
+import { executeAgentDiscovery } from '../services/agentDiscoveryService.js';
 import { normalizeWhatsAppNumber, isValidEmail, isValidUsername, normalizeUsername } from '../../src/utils/validators.js';
 import { extractContactInfo } from '../../src/utils/contactExtractor.js';
 import { normalizePlan, isProPlan, toCanonicalPlan, isFreePlan, isPlusPlan } from '../../src/utils/planUtils.js';
@@ -2908,6 +2909,32 @@ router.post('/payments/webhook', (req, res) => {
     eventId,
     status: 'processed',
   });
+});
+
+// 24. POST /api/agent/discover - Local AI Agent Discovery Pipeline (Step 2E/3)
+router.post('/agent/discover', async (req, res) => {
+  try {
+    const { queries, limitPerQuery, persist, rawItems } = req.body || {};
+
+    const result = await executeAgentDiscovery({
+      queries,
+      limitPerQuery,
+      persist: persist !== false,
+      rawItems,
+    });
+
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error('[Agent Discovery Error]', err);
+    return res.status(500).json({
+      success: false,
+      error: {
+        code: 'DISCOVERY_FAILED',
+        message: err.message || 'Discovery pipeline failed',
+      },
+      opportunities: [],
+    });
+  }
 });
 
 export default router;
