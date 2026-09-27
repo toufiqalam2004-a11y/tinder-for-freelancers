@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { db } from '../database.js';
 import { deduplicateOpportunities } from '../../src/services/deduplicationService.js';
 import {
@@ -124,9 +126,16 @@ export async function executeAgentDiscovery(options = {}) {
   const safeLimit = Math.max(1, Math.min(parseInt(limitPerQuery, 10) || 5, 10));
 
   // 2. Discover via Agent Reach (Python stdio runner)
+  const repoAdapterDir = path.resolve('integrations/agent_reach');
+  const externalAdapterDir = process.env.AGENT_REACH_ADAPTER_DIR || 'C:\\Users\\toufi\\.agent-reach';
+  const adapterDir = fs.existsSync(path.join(repoAdapterDir, 'agent_reach_mcp_adapter.py'))
+    ? repoAdapterDir
+    : externalAdapterDir;
+  const pythonBin = process.env.AGENT_REACH_PYTHON_BIN || 'C:\\Users\\toufi\\.agent-reach-venv\\Scripts\\python.exe';
+
   const pythonScript = `
 import sys, json
-sys.path.insert(0, r'C:\\Users\\toufi\\.agent-reach')
+sys.path.insert(0, ${JSON.stringify(adapterDir)})
 from agent_reach_mcp_adapter import search_public_hiring
 
 queries = ${JSON.stringify(safeQueries)}
@@ -151,7 +160,7 @@ print(json.dumps(all_results))
     if (Array.isArray(options.rawItems)) {
       rawDiscovered = options.rawItems;
     } else {
-      const rawOutput = execFileSync('C:\\Users\\toufi\\.agent-reach-venv\\Scripts\\python.exe', ['-c', pythonScript], {
+      const rawOutput = execFileSync(pythonBin, ['-c', pythonScript], {
         encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
         timeout: 45000,

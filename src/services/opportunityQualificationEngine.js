@@ -84,7 +84,27 @@ export function validateOpportunityStage1(opportunity = {}, profile = LOCAL_TEST
 
   // 5. Recognizable hiring opportunity intent
   const fullText = `${title} ${description}`;
-  const isKnownHiringSource = opportunity.source === 'Remotive' || opportunity.source === 'HackerNews';
+  const lowerFull = fullText.toLowerCase();
+
+  // Explicit non-hiring signals (self-promotion, freelancer seeking work, tutorials)
+  const isSelfPromo = [
+    'seeking work',
+    '[for hire]',
+    'for hire',
+    'hire me',
+    'i am looking for work',
+    'available for work',
+    'looking to be hired',
+  ].some((signal) => lowerFull.includes(signal));
+
+  if (isSelfPromo) {
+    return { valid: false, reason: 'Does not meet hiring intent thresholds (self-promotion / seeking work post)' };
+  }
+
+  const isKnownHiringSource =
+    opportunity.source === 'Remotive' ||
+    opportunity.source === 'HackerNews' ||
+    opportunity.source === 'WeWorkRemotely';
   if (!isKnownHiringSource && !isHiringOpportunity(fullText)) {
     return { valid: false, reason: 'Does not meet hiring intent thresholds (likely self-promo or general discussion)' };
   }
@@ -110,18 +130,19 @@ export function validateOpportunityStage1(opportunity = {}, profile = LOCAL_TEST
       'qa engineer',
       'content moderator',
       'ai evaluator',
+      'research scientist',
+      'platform engineer',
+      'service desk engineer',
+      'data annotator',
+      'narrator',
     ];
 
     const matchedMismatch = incompatibleDomains.find((d) => lowerTitle.includes(d));
     if (matchedMismatch) {
-      // Check if description specifies video editing duties as primary responsibility
-      const hasCoreVideoDuties = /\b(video editor|editing videos|premiere pro|after effects|short-form video|reels editor)\b/i.test(description);
-      if (!hasCoreVideoDuties) {
-        return {
-          valid: false,
-          reason: `Stage 1 filter: Obvious role mismatch (${title} is in engineering/support/moderation, not creative video production)`,
-        };
-      }
+      return {
+        valid: false,
+        reason: `Stage 1 filter: Obvious role mismatch (${title} is in engineering/support/moderation, not creative video production)`,
+      };
     }
   }
 
